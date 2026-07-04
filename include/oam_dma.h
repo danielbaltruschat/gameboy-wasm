@@ -23,7 +23,7 @@ public:
 private:
     bool active = false;
 
-    uint8_t dma_reg = 0;
+    uint8_t dma_reg = 0; //stored value of OAM DMA register at FF46 address
     uint16_t source_base = 0;
 
     int index = 0;             // 0..159
