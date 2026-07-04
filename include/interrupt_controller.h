@@ -13,13 +13,14 @@ enum class Interrupt {
 
 class InterruptController {
 public:
-    void reset();
+    void reset(); // reset interrupt state and clear registers
 
-    void request(Interrupt i);
+    void request(Interrupt i); // Set corresponding bit in IF
 
+    // Get highest priority interrupt that is requested and enabled
     std::optional<Interrupt> highest_priority_pending() const;
 
-    void acknowledge(Interrupt i);
+    void acknowledge(Interrupt i); // Clears interrupt bit in IF after CPU handles it
 
     uint8_t read_if() const;
     void write_if(uint8_t value);
