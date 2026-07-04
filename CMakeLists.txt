@@ -14,7 +14,6 @@ add_executable(gameboy_wasm
     "src/gameboy.cpp"
     "src/interrupt_controller.cpp"
     "src/cartridge.cpp"
-    "src/io.cpp"
     "src/keypad.cpp"
     "src/main.cpp"
     "src/memory.cpp"

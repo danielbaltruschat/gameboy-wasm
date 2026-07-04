@@ -1,3 +1,5 @@
+#pragma once
+
 #include <cstdint>
 #include "bus.h"
 
@@ -6,8 +8,11 @@ public:
     CPU(MemBus& bus);
 
     void reset();
+    void step_m_cycle();
     int step();                 // execute one instruction or interrupt, return cycles
     void request_stop();         // optional, depending on design
+
+    bool instruction_boundary() const;
 
 private:
     MemBus& bus;
@@ -27,6 +32,13 @@ private:
     bool interruptFlag; // IF flag
     bool halted;
     bool stopped;
+    bool halt_bug;               // optional but useful for accuracy
+    int pending_internal_m_cycles;
+    bool at_instruction_boundary;
+    bool cb_prefix_active;
+    uint8_t current_opcode;
+    uint8_t current_cb_opcode;
+    uint8_t instruction_m_cycle;
 
     // Fetch/decode/execute
     uint8_t fetch8();
