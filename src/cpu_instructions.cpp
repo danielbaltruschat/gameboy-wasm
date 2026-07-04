@@ -82,3 +82,7 @@ void CPUInstructions::INC_HL(CPU& cpu) {
 void CPUInstructions::INC_SP(CPU& cpu) {
     cpu.sp += 1;
 }
+
+void CPUInstructions::INC_B(CPU& cpu) {
+    cpu.b = cpu.inc8(cpu.b);
+}

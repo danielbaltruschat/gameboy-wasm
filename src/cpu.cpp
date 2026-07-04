@@ -122,3 +122,10 @@ void CPU::set_hl(uint16_t value) {
     l = value & 0xFF;
 }
 
+uint8_t CPU::inc8(uint8_t value) {
+    uint8_t result = value + 1;
+    set_z(result == 0);
+    set_n(false);
+    set_h((value & 0x0F) == 0x0F);
+    return result;
+}
