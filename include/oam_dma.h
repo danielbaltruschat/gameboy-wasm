@@ -2,8 +2,6 @@
 
 #include <cstdint>
 
-
-
 class OamDma {
 public:
     void reset();
