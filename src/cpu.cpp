@@ -2,6 +2,22 @@
 #include "cpu_instructions.h"
 #include "bus.h"
 
+
+
+
+
+
+int CPU::execute(uint8_t opcode) {
+    switch (opcode) {
+        case 0x00: { CPUInstructions::NOP(*this); return 1; }           case 0x01: { CPUInstructions::LD_BC_d16(*this, fetch16()); return 3; }          case 0x02: { CPUInstructions::LD_pBC_A(*this); return 2; }          case 0x03: { CPUInstructions::INC_BC(*this); return 2; }            case 0x04: { CPUInstructions::INC_B(*this); return 1; }         case 0x05: { CPUInstructions::DEC_B(*this); return 1; }
+                                                                        case 0x11: { CPUInstructions::LD_DE_d16(*this, fetch16()); return 3; }          case 0x12: { CPUInstructions::LD_pDE_A(*this); return 2; }          case 0x13: { CPUInstructions::INC_DE(*this); return 2; }            case 0x14: { CPUInstructions::INC_D(*this); return 1; }         case 0x15: { CPUInstructions::DEC_D(*this); return 1; }
+                                                                        case 0x21: { CPUInstructions::LD_HL_d16(*this, fetch16()); return 3; }          case 0x22: { CPUInstructions::LD_pHLp_A(*this); return 2; }         case 0x23: { CPUInstructions::INC_HL(*this); return 2; }            case 0x24: { CPUInstructions::INC_H(*this); return 1; }         case 0x25: { CPUInstructions::DEC_H(*this); return 1; }
+                                                                        case 0x31: { CPUInstructions::LD_SP_d16(*this, fetch16()); return 3; }          case 0x32: { CPUInstructions::LD_pHLm_A(*this); return 2; }         case 0x33: { CPUInstructions::INC_SP(*this); return 2; }            case 0x34: { CPUInstructions::INC_pHL(*this); return 3; }       case 0x35: { CPUInstructions::DEC_pHL(*this); return 3; }
+        default: return -1;
+    }
+    pc++;
+}
+
 // CPU::CPU(MemBus& bus) : bus(bus) {
 //     reset();
 // }
@@ -52,17 +68,6 @@ uint16_t CPU::fetch16() {
     uint16_t value = read16(pc);
     pc += 2;
     return value;
-}
-
-int CPU::execute(uint8_t opcode) {
-    switch (opcode) {
-        case 0x00: { CPUInstructions::NOP(*this); return 1; }           case 0x01: { CPUInstructions::LD_BC_d16(*this, fetch16()); return 3; }          case 0x02: { CPUInstructions::LD_pBC_A(*this); return 2; }          case 0x03: { CPUInstructions::INC_BC(*this); return 2; }        
-                                                                        case 0x11: { CPUInstructions::LD_DE_d16(*this, fetch16()); return 3; }          case 0x12: { CPUInstructions::LD_pDE_A(*this); return 2; }          case 0x13: { CPUInstructions::INC_DE(*this); return 2; }         
-                                                                        case 0x21: { CPUInstructions::LD_HL_d16(*this, fetch16()); return 3; }          case 0x22: { CPUInstructions::LD_pHLp_A(*this); return 2; }         case 0x23: { CPUInstructions::INC_HL(*this); return 2; }
-                                                                        case 0x31: { CPUInstructions::LD_SP_d16(*this, fetch16()); return 3; }          case 0x32: { CPUInstructions::LD_pHLm_A(*this); return 2; }         case 0x33: { CPUInstructions::INC_SP(*this); return 2; }
-        default: return -1;
-    }
-    pc++;
 }
 
 uint8_t CPU::read8(uint16_t addr) {
@@ -127,5 +132,13 @@ uint8_t CPU::inc8(uint8_t value) {
     set_z(result == 0);
     set_n(false);
     set_h((value & 0x0F) == 0x0F);
+    return result;
+}
+
+uint8_t CPU::dec8(uint8_t value) {
+    uint8_t result = value - 1;
+    set_z(result == 0);
+    set_n(true);
+    set_h((value & 0x0F) == 0x00);
     return result;
 }
