@@ -1,7 +1,21 @@
 #include "cpu.h"
+#include "cpu_instructions.h"
+#include "bus.h"
 
-CPU::CPU(MemBus& bus) : bus(bus) {
+// CPU::CPU(MemBus& bus) : bus(bus) {
+//     reset();
+// }
+
+CPU::CPU(){
     reset();
+}
+
+void CPU::debugPrintState() {
+    std::cout << "A: " << std::hex << (int)a << " F: " << std::hex << (int)f << std::endl;
+    std::cout << "B: " << std::hex << (int)b << " C: " << std::hex << (int)c << std::endl;
+    std::cout << "D: " << std::hex << (int)d << " E: " << std::hex << (int)e << std::endl;
+    std::cout << "H: " << std::hex << (int)h << " L: " << std::hex << (int)l << std::endl;
+    std::cout << "SP: " << std::hex << sp << " PC: " << std::hex << pc << std::endl;
 }
 
 void CPU::reset() {
@@ -15,7 +29,7 @@ void CPU::reset() {
     l = 0x4d;
 
     sp = 0xfffe;
-    pc = 0x0100;
+    pc = 0x0000; // 0x0100
 
     interruptEnabled = false;
     interruptFlag = false;
@@ -24,7 +38,8 @@ void CPU::reset() {
 }
 
 int CPU::step() {
-    return 0;
+    uint8_t opcode = fetch8();
+    return execute(opcode);
 }
 
 uint8_t CPU::fetch8() {
@@ -41,7 +56,69 @@ uint16_t CPU::fetch16() {
 
 int CPU::execute(uint8_t opcode) {
     switch (opcode) {
-        case 0x00: { return 0; }
+        case 0x00: { CPUInstructions::NOP(*this); return 1; }           case 0x01: { CPUInstructions::LD_BC_d16(*this, fetch16()); return 3; }          case 0x02: { CPUInstructions::LD_pBC_A(*this); return 2; }          case 0x03: { CPUInstructions::INC_BC(*this); return 2; }        
+                                                                        case 0x11: { CPUInstructions::LD_DE_d16(*this, fetch16()); return 3; }          case 0x12: { CPUInstructions::LD_pDE_A(*this); return 2; }          case 0x13: { CPUInstructions::INC_DE(*this); return 2; }         
+                                                                        case 0x21: { CPUInstructions::LD_HL_d16(*this, fetch16()); return 3; }          case 0x22: { CPUInstructions::LD_pHLp_A(*this); return 2; }         case 0x23: { CPUInstructions::INC_HL(*this); return 2; }
+                                                                        case 0x31: { CPUInstructions::LD_SP_d16(*this, fetch16()); return 3; }          case 0x32: { CPUInstructions::LD_pHLm_A(*this); return 2; }         case 0x33: { CPUInstructions::INC_SP(*this); return 2; }
         default: return -1;
     }
+    pc++;
 }
+
+uint8_t CPU::read8(uint16_t addr) {
+    //return bus.read(addr);
+    return testMemory[addr % testMemory.size()];
+}
+
+void CPU::write8(uint16_t addr, uint8_t value) {
+    //bus.write(addr, value);
+    testMemory[addr % testMemory.size()] = value;
+}
+
+uint16_t CPU::read16(uint16_t addr) {
+    uint8_t low = read8(addr);
+    uint8_t high = read8(addr + 1);
+    return (high << 8) | low;
+}
+
+void CPU::write16(uint16_t addr, uint16_t value) {
+    write8(addr, value & 0xFF);
+    write8(addr + 1, (value >> 8) & 0xFF);
+}
+
+uint16_t CPU::af() const {
+    return (a << 8) | f;
+}
+
+uint16_t CPU::bc() const {
+    return (b << 8) | c;
+}
+
+uint16_t CPU::de() const {
+    return (d << 8) | e;
+}
+
+uint16_t CPU::hl() const {
+    return (h << 8) | l;
+}
+
+void CPU::set_af(uint16_t value) {
+    a = value >> 8;
+    f = value & 0xF0;
+}
+
+void CPU::set_bc(uint16_t value) {
+    b = value >> 8;
+    c = value & 0xFF;
+}
+
+void CPU::set_de(uint16_t value) {
+    d = value >> 8;
+    e = value & 0xFF;
+}
+
+void CPU::set_hl(uint16_t value) {
+    h = value >> 8;
+    l = value & 0xFF;
+}
+
