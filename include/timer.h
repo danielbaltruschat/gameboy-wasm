@@ -2,8 +2,6 @@
 
 #include <cstdint>
 
-#include "dmg_clock.h"
-
 class InterruptController;
 
 class Timer {
@@ -12,7 +10,7 @@ public:
 
     void reset();
 
-    void tick_dots(dmg::DotCount dots);
+    void tick_dots(int dots);
 
     uint8_t read(uint16_t addr) const;
     void write(uint16_t addr, uint8_t value);

@@ -2,8 +2,6 @@
 
 #include <cstdint>
 
-#include "dmg_clock.h"
-
 class InterruptController;
 
 class Serial {
@@ -15,7 +13,7 @@ public:
     uint8_t read(uint16_t addr) const;
     void write(uint16_t addr, uint8_t value);
 
-    void tick_dots(dmg::DotCount dots);
+    void tick_dots(int dots);
     void clock_external_bit(bool incoming_bit);
 
     bool transfer_active() const;

@@ -2,7 +2,6 @@
 
 #include <cstdint>
 
-#include "dmg_clock.h"
 
 
 class OamDma {
@@ -11,7 +10,7 @@ public:
 
     void start(uint8_t source_high_byte);
 
-    void tick_dots(dmg::DotCount dots);
+    void tick_dots(int dots);
 
     bool is_active() const;
     bool blocks_cpu_access(uint16_t addr) const;
