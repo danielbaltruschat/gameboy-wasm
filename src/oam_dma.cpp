@@ -50,3 +50,14 @@ void OamDma::acknowledge_copy() {
         dot_counter = 0;
     }
 }
+
+void OamDma::tick_dots(int dots) {
+    if (!active || dots <= 0) return;
+
+    dot_counter += dots;
+
+    while (dot_counter >= 4 && (index + pending_copies) < 160) { // OAM DMA copies 1 byte per M cycle (so 4 dot cycle)
+        dot_counter -= 4;
+        pending_copies++;
+    }
+}
