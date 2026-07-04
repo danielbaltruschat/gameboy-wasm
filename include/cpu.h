@@ -23,11 +23,10 @@ private:
     uint16_t pc;
 
     // CPU control state
-    bool ime;                   // interrupt master enable
-    bool ime_scheduled;          // EI enables IME after next instruction
+    bool interruptEnabled; // IE flag
+    bool interruptFlag; // IF flag
     bool halted;
     bool stopped;
-    bool halt_bug;               // optional but useful for accuracy
 
     // Fetch/decode/execute
     uint8_t fetch8();
