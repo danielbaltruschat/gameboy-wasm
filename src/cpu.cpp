@@ -1,8 +1,10 @@
+#include "cpu.h"
+
 CPU::CPU(MemBus& bus) : bus(bus) {
     reset();
 }
 
-CPU::reset() {
+void CPU::reset() {
     a = 0x01;
     f = 0xb0;
     b = 0x00;
@@ -21,23 +23,23 @@ CPU::reset() {
     stopped = false;
 }
 
-CPU::step() {
+int CPU::step() {
     return 0;
 }
 
-CPU::fetch8() {
+uint8_t CPU::fetch8() {
     uint8_t value = read8(pc);
     pc++;
     return value;
 }
 
-CPU::fetch16() {
+uint16_t CPU::fetch16() {
     uint16_t value = read16(pc);
     pc += 2;
     return value;
 }
 
-CPU::execute(uint8_t opcode) {
+int CPU::execute(uint8_t opcode) {
     switch (opcode) {
         case 0x00: { return 0; }
         default: return -1;
