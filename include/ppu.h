@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 
-#include "dmg_clock.h"
 #include "bus.h"
 
 class InterruptController;
@@ -25,7 +24,7 @@ public:
     explicit PPU(InterruptController& interrupts);
 
     void reset();
-    void tick_dots(dmg::DotCount dots);
+    void tick_dots(int dots);
 
     uint8_t read(uint16_t addr) const;
     void write(uint16_t addr, uint8_t value);

@@ -3,7 +3,6 @@
 #include <cstdint>
 
 #include "boot_rom.h"
-#include "dmg_clock.h"
 #include "oam_dma.h"
 
 class APU;
@@ -49,7 +48,7 @@ public:
     uint8_t read(uint16_t addr);
     void write(uint16_t addr, uint8_t value);
 
-    void tick_dma_dots(dmg::DotCount dots);
+    void tick_dma_dots(int dots);
     bool dma_active() const;
 
     uint8_t read_dma_source(uint16_t addr);

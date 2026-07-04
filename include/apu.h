@@ -5,8 +5,6 @@
 #include <span>
 #include <vector>
 
-#include "dmg_clock.h"
-
 struct Sample {
     float left = 0.0f;
     float right = 0.0f;
@@ -20,7 +18,7 @@ public:
     APU() = default;
 
     void reset();
-    void tick_dots(dmg::DotCount dots);
+    void tick_dots(int dots);
     void clock_div_apu();
 
     uint8_t read(uint16_t addr) const;
@@ -113,10 +111,10 @@ private:
     void tick_envelopes();
     void tick_sweep();
 
-    void tick_channels(dmg::DotCount dots);
-    void tick_pulse(PulseChannel& channel, dmg::DotCount dots);
-    void tick_wave(dmg::DotCount dots);
-    void tick_noise(dmg::DotCount dots);
+    void tick_channels(int dots);
+    void tick_pulse(PulseChannel& channel, int dots);
+    void tick_wave(int dots);
+    void tick_noise(int dots);
 
     void trigger_ch1();
     void trigger_ch2();
@@ -129,5 +127,5 @@ private:
 
     Sample mix() const;
     Sample apply_high_pass_filter(Sample sample);
-    void push_samples_if_due(dmg::DotCount dots);
+    void push_samples_if_due(int dots);
 };
