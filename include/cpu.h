@@ -1,11 +1,18 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <iostream>
 #include "bus.h"
 
+class CPUInstructions;
+
 class CPU {
+    friend class CPUInstructions;
+
 public:
-    CPU(MemBus& bus);
+    //CPU(MemBus& bus);
+    CPU();
 
     void reset();
     void step_m_cycle();
@@ -14,8 +21,12 @@ public:
 
     bool instruction_boundary() const;
 
+    void debugPrintState();
+
+    std::array<uint8_t, 8> testMemory = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+
 private:
-    MemBus& bus;
+    // MemBus& bus;
 
     // 8-bit registers
     uint8_t a, f;
