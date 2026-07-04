@@ -23,10 +23,10 @@ public:
 private:
     bool active = false;
 
-    uint8_t dma_reg = 0; //stored value of OAM DMA register at FF46 address
-    uint16_t source_base = 0;
+    uint8_t dma_reg = 0; // stored value of OAM DMA register at FF46 address
+    uint16_t source_base = 0; // start address for DMA copy
 
     int index = 0;             // 0..159
     int dot_counter = 0;       // copies every 4 dots
-    int pending_copies = 0;
+    int pending_copies = 0; // How many bytes to copy that are ready but the bus has not yet performed
 };
