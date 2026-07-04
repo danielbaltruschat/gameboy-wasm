@@ -2,10 +2,6 @@ CPU::CPU(MemBus& bus) : bus(bus) {
     reset();
 }
 
-CPU::~CPU() {
-
-}
-
 CPU::reset() {
     a = 0x01;
     f = 0xb0;
@@ -23,11 +19,10 @@ CPU::reset() {
     interruptFlag = false;
     halted = false;
     stopped = false;
-    halt_bug = false;
 }
 
 CPU::step() {
-
+    return 0;
 }
 
 CPU::fetch8() {
@@ -45,8 +40,6 @@ CPU::fetch16() {
 CPU::execute(uint8_t opcode) {
     switch (opcode) {
         case 0x00: { return 0; }
-        default:
-            std::cerr << "Unknown opcode: " << std::hex << (int)opcode << std::endl;
-            return -1; // Unknown opcode
+        default: return -1;
     }
 }
