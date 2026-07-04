@@ -16,8 +16,9 @@ public:
 
     void reset();
     void step_m_cycle();
-    int step();                 // execute one instruction or interrupt, return cycles
-    void request_stop();         // optional, depending on design
+    //executes a single instruction
+    int step();
+    void request_stop();
 
     bool instruction_boundary() const;
 
@@ -28,17 +29,17 @@ public:
 private:
     // MemBus& bus;
 
-    // 8-bit registers
+    //8 bit registers
     uint8_t a, f;
     uint8_t b, c;
     uint8_t d, e;
     uint8_t h, l;
 
-    // 16-bit registers
+    //16 bit registers
     uint16_t sp;
     uint16_t pc;
 
-    // CPU control state
+    //CPU state flags
     bool interruptEnabled; // IE flag
     bool interruptFlag; // IF flag
     bool halted;
@@ -51,26 +52,26 @@ private:
     uint8_t current_cb_opcode;
     uint8_t instruction_m_cycle;
 
-    // Fetch/decode/execute
+    //FDE cycle
     uint8_t fetch8();
     uint16_t fetch16();
     int execute(uint8_t opcode);
     int execute_cb(uint8_t opcode);
 
-    // Interrupts
+    //interupt handling
     bool handle_interrupts();
 
-    // Memory helpers
+    //memory helpers
     uint8_t read8(uint16_t addr);
     void write8(uint16_t addr, uint8_t value);
     uint16_t read16(uint16_t addr);
     void write16(uint16_t addr, uint16_t value);
 
-    // Stack helpers
+    //stack helpers
     void push16(uint16_t value);
     uint16_t pop16();
 
-    // Register pair helpers
+    //register pair helpers
     uint16_t af() const;
     uint16_t bc() const;
     uint16_t de() const;
@@ -81,7 +82,7 @@ private:
     void set_de(uint16_t value);
     void set_hl(uint16_t value);
 
-    // Flag helpers
+    //flag helpers
     bool flag_z() const;
     bool flag_n() const;
     bool flag_h() const;
@@ -92,7 +93,7 @@ private:
     void set_h(bool value);
     void set_c(bool value);
 
-    // ALU helpers
+    //ALU helpers
     uint8_t add8(uint8_t lhs, uint8_t rhs);
     uint8_t adc8(uint8_t lhs, uint8_t rhs);
     uint8_t sub8(uint8_t lhs, uint8_t rhs);
@@ -107,7 +108,7 @@ private:
 
     uint16_t add16(uint16_t lhs, uint16_t rhs);
 
-    // Rotate/shift/bit helpers
+    //bit helpers
     uint8_t rlc(uint8_t value);
     uint8_t rrc(uint8_t value);
     uint8_t rl(uint8_t value);
