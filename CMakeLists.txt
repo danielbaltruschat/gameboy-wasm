@@ -11,6 +11,7 @@ add_executable(gameboy_wasm
     "src/apu.cpp"
     "src/bus.cpp"
     "src/cpu.cpp"
+    "src/cpu_instructions.cpp"
     "src/gameboy.cpp"
     "src/interrupt_controller.cpp"
     "src/cartridge.cpp"
