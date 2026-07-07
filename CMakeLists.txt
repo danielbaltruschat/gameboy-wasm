@@ -46,6 +46,7 @@ if(BUILD_TESTING)
         "tests/tests.cpp"
         "tests/cputests.cpp"
         "tests/interrupt_controller_tests.cpp"
+        "tests/joypad_tests.cpp"
         "tests/memory_tests.cpp"
         "tests/oam_dma_tests.cpp"
     )
