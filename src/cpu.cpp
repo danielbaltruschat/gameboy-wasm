@@ -17,11 +17,7 @@ int CPU::execute(uint8_t opcode) {
     }
 }
 
-// CPU::CPU(MemBus& bus) : bus(bus) {
-//     reset();
-// }
-
-CPU::CPU(){
+CPU::CPU(MemBus& bus, bool isTest) : bus(bus), isTest(isTest) {
     reset();
 }
 
