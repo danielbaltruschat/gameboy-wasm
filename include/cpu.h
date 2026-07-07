@@ -11,7 +11,7 @@ class CPU {
     friend class CPUInstructions;
 
 public:
-    CPU(MemBus& bus, bool isTest);
+    CPU(MemBus* bus, bool isTest);
 
     void reset();
     void step_m_cycle();
@@ -26,8 +26,10 @@ public:
     std::vector<uint8_t> testMemory;
     bool isTest;
 
-private:
-    // MemBus& bus;
+    //making these public for tests @deniel i need to talk with you about this
+//private: 
+
+    MemBus* bus;
 
     //8 bit registers
     uint8_t a, f;

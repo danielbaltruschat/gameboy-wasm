@@ -17,7 +17,7 @@ int CPU::execute(uint8_t opcode) {
     }
 }
 
-CPU::CPU(MemBus& bus, bool isTest) : bus(bus), isTest(isTest) {
+CPU::CPU(MemBus* bus, bool isTest) : bus(bus), isTest(isTest) {
     reset();
 }
 
@@ -56,28 +56,31 @@ void CPU::reset() {
 int CPU::step() {
     uint8_t opcode = fetch8();
     int cycles = execute(opcode);
-    pc += cycles;
+    pc += 1;
     return cycles;
 }
 
 uint8_t CPU::fetch8() {
     uint8_t value = read8(pc);
+    pc += 1;
     return value;
 }
 
 uint16_t CPU::fetch16() {
     uint16_t value = read16(pc);
+    pc += 2;
     return value;
 }
 
 uint8_t CPU::read8(uint16_t addr) {
+    if(isTest) return testMemory[addr % testMemory.size()];
     //return bus.read(addr);
-    return testMemory[addr % testMemory.size()];
+    return 0x00;
 }
 
 void CPU::write8(uint16_t addr, uint8_t value) {
+    if(isTest) testMemory[addr % testMemory.size()] = value;
     //bus.write(addr, value);
-    testMemory[addr % testMemory.size()] = value;
 }
 
 uint16_t CPU::read16(uint16_t addr) {
