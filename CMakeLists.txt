@@ -52,11 +52,12 @@ if(BUILD_TESTING)
   endif()
 
   add_executable(gameboy_tests
-      "tests/tests.cpp"
-      "tests/cputests.cpp"
-      "tests/interrupt_controller_tests.cpp"
-      "tests/oam_dma_tests.cpp"
-  )
+        "tests/tests.cpp"
+        "tests/cputests.cpp"
+        "tests/interrupt_controller_tests.cpp"
+        "tests/oam_dma_tests.cpp"
+        "tests/timer_tests.cpp"
+    )
 
   target_link_libraries(gameboy_tests PRIVATE
       gameboy_core
