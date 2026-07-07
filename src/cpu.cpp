@@ -56,7 +56,6 @@ void CPU::reset() {
 int CPU::step() {
     uint8_t opcode = fetch8();
     int cycles = execute(opcode);
-    pc += 1;
     return cycles;
 }
 

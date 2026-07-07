@@ -16,7 +16,8 @@ void CPUInstructions::NOP(CPU&) {
 
 
 void CPUInstructions::LD_BC_d16(CPU& cpu) {
-    cpu.set_bc(cpu.fetch16());
+    uint16_t fetched = cpu.fetch16();
+    cpu.set_bc(((fetched>>8)&0xFF)|((fetched & 0xFF)<<8));
 }
 
 void CPUInstructions::LD_DE_d16(CPU& cpu) {
