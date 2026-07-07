@@ -47,6 +47,7 @@ if(BUILD_TESTING)
         "tests/cputests.cpp"
         "tests/interrupt_controller_tests.cpp"
         "tests/oam_dma_tests.cpp"
+        "tests/timer_tests.cpp"
     )
 
   target_link_libraries(gameboy_tests PRIVATE

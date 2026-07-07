@@ -26,7 +26,7 @@ private:
 
     InterruptController& interrupts;
 
-    uint16_t div_counter; // Internal 16-bit system counter; FF04 exposes high byte.
+    uint16_t div_counter; // Internal 16-bit system counter; FF04 exposes upper byte.
 
     uint8_t tima; // FF05
     uint8_t tma;  // FF06
