@@ -40,19 +40,29 @@ target_link_libraries(gameboy_wasm PRIVATE
 include(CTest)
 
 if(BUILD_TESTING)
-  find_package(Catch2 3 REQUIRED)
+  # Try to find it normally, but if that fails, download it
+  find_package(Catch2 3 QUIET)
+  if(NOT Catch2_FOUND)
+    include(FetchContent)
+    FetchContent_Declare(
+      Catch2
+      GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+      GIT_TAG        v3.4.0
+    )
+    FetchContent_MakeAvailable(Catch2)
+  endif()
 
   add_executable(gameboy_tests
-        "tests/tests.cpp"
-        "tests/cputests.cpp"
-        "tests/interrupt_controller_tests.cpp"
-        "tests/oam_dma_tests.cpp"
-    )
+      "tests/tests.cpp"
+      "tests/cputests.cpp"
+      "tests/interrupt_controller_tests.cpp"
+      "tests/oam_dma_tests.cpp"
+  )
 
   target_link_libraries(gameboy_tests PRIVATE
-        gameboy_core
-        Catch2::Catch2WithMain
-    )
+      gameboy_core
+      Catch2::Catch2WithMain
+  )
 
   include(Catch)
   catch_discover_tests(gameboy_tests)
