@@ -7,7 +7,7 @@
 
 class BootRom {
 public:
-    static constexpr std::size_t dmg_size = 0x100;
+    static constexpr std::size_t dmg_size = 0x100; //256 bytes long
 
     void load_dmg(std::span<const uint8_t> data);
     void reset();
