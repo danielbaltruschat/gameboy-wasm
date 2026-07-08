@@ -40,7 +40,6 @@ target_link_libraries(gameboy_wasm PRIVATE
 include(CTest)
 
 if(BUILD_TESTING)
-  # Try to find it normally, but if that fails, download it
   find_package(Catch2 3 QUIET)
   if(NOT Catch2_FOUND)
     include(FetchContent)
