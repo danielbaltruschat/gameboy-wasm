@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_library(gameboy_core
     "src/apu.cpp"
+    "src/boot_rom.cpp"
     "src/bus.cpp"
     "src/cartridge.cpp"
     "src/cpu.cpp"
@@ -53,6 +54,7 @@ if(BUILD_TESTING)
 
   add_executable(gameboy_tests
         "tests/tests.cpp"
+        "tests/boot_rom_tests.cpp"
         "tests/cputests.cpp"
         "tests/interrupt_controller_tests.cpp"
         "tests/joypad_tests.cpp"
