@@ -4,39 +4,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <string>
 #include <vector>
 
-
 struct CartridgeHeader {
-    std::array<uint8_t, 4> entryPoint;        // 0x0100-0x0103
-    std::array<uint8_t, 48> nintendoLogo;     // 0x0104-0x0133
-
-    std::string title;                        // parsed from 0x0134...
-    std::string manufacturerCode;             // 0x013F-0x0142 on newer carts
-
-    uint8_t cgbFlag;                          // 0x0143
-    std::string newLicenseeCode;              // 0x0144-0x0145
-    uint8_t sgbFlag;                          // 0x0146
-    uint8_t cartridgeType;                    // 0x0147
-    uint8_t romSizeCode;                      // 0x0148
-    uint8_t ramSizeCode;                      // 0x0149
-    uint8_t destinationCode;                  // 0x014A
-    uint8_t oldLicenseeCode;                  // 0x014B
-    uint8_t maskRomVersion;                   // 0x014C
-    uint8_t headerChecksum;                   // 0x014D
-    uint16_t globalChecksum;                  // 0x014E-0x014F, big-endian
-
-    std::size_t romSizeBytes = 0;
-    std::size_t romBankCount = 0;
-    std::size_t ramSizeBytes = 0;
-    std::size_t ramBankCount = 0;
-
-    bool cgbSupported = false;
-    bool cgbOnly = false;
-    bool sgbSupported = false;
-
-    bool headerChecksumValid = false;
+    uint8_t cartridgeType = 0;       // 0x0147: describes the cartridge PCB.
+    std::size_t ramSizeBytes = 0;    // Decoded from 0x0149.
 };
 
 enum class MapperType {
