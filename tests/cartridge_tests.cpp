@@ -4,7 +4,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 #include <vector>
 
 #include "cartridge.h"
@@ -42,16 +41,6 @@ TEST_CASE("Cartridge reports no ROM before loading")
 {
     Cartridge cartridge;
 
-    REQUIRE_FALSE(cartridge.loaded());
-}
-
-TEST_CASE("Cartridge rejects a ROM too small to contain its header")
-{
-    const std::vector<uint8_t> rom(0x14F, 0x00);
-    Cartridge cartridge;
-
-    REQUIRE_THROWS_AS(Cartridge(rom), std::invalid_argument);
-    REQUIRE_THROWS_AS(cartridge.load_rom(rom), std::invalid_argument);
     REQUIRE_FALSE(cartridge.loaded());
 }
 

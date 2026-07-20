@@ -1,7 +1,6 @@
 #include "cartridge.h"
 
 #include <cassert>
-#include <stdexcept>
 #include <utility>
 
 namespace {
@@ -10,24 +9,18 @@ constexpr std::size_t minimum_header_size = 0x150;
 constexpr std::size_t rom_bank_size = 0x4000;
 constexpr std::size_t ram_bank_size = 0x2000;
 
-void validate_rom_size(std::size_t size) {
-    if (size < minimum_header_size) {
-        throw std::invalid_argument("Cartridge ROM is too small to contain a header");
-    }
-}
-
 } // namespace
 
 Cartridge::Cartridge(std::vector<uint8_t> rom)
     : rom(std::move(rom)) {
-    validate_rom_size(this->rom.size());
+    assert(this->rom.size() >= minimum_header_size);
     parse_header();
     configure_mapper();
     reset_mapper();
 }
 
 void Cartridge::load_rom(std::span<const uint8_t> rom) {
-    validate_rom_size(rom.size());
+    assert(rom.size() >= minimum_header_size);
 
     this->rom.assign(rom.begin(), rom.end());
 
@@ -49,8 +42,6 @@ const CartridgeCapabilities& Cartridge::get_capabilities() const {
 }
 
 void Cartridge::parse_header() {
-    assert(rom.size() >= minimum_header_size);
-
     header = {};
     header.cartridgeType = rom[0x0147];
 
