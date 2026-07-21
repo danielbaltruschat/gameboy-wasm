@@ -52,6 +52,7 @@ if(BUILD_TESTING)
         "tests/joypad_tests.cpp"
         "tests/memory_tests.cpp"
         "tests/oam_dma_tests.cpp"
+        "tests/ppu_tests.cpp"
         "tests/timer_tests.cpp"
     )
 
