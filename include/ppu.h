@@ -117,7 +117,6 @@ private:
     bool oam_accessible() const;
     uint8_t stat_value() const;
     void set_mode(Mode next_mode);
-    void update_lyc();
     void update_stat_interrupt();
     void begin_scanline();
     void evaluate_objects_for_line();
