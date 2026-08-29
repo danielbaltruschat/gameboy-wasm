@@ -347,10 +347,11 @@ std::size_t Cartridge::effective_rom_offset(uint16_t address) const {
         case MapperType::Mbc1: {
             const int upper_shift = capabilities.hasMbc1MulticartLayout ? 4 : 5;
             const uint8_t lower_mask = capabilities.hasMbc1MulticartLayout ? 0x0F : 0x1F;
-            uint8_t lower_bank = mbc1.lower_rom_bank_bits & lower_mask;
+            uint8_t lower_bank = mbc1.lower_rom_bank_bits;
             if (lower_bank == 0) {
                 lower_bank = 1;
             }
+            lower_bank &= lower_mask;
             bank =
                 (static_cast<std::size_t>(mbc1.upper_bank_bits) << upper_shift) |
                 lower_bank;

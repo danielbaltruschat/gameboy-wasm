@@ -230,8 +230,11 @@ TEST_CASE("MBC1 detects and maps multicart sub-ROM wiring")
     REQUIRE(cartridge.get_capabilities().hasMbc1MulticartLayout);
 
     cartridge.write(0x4000, 0x01);
-    cartridge.write(0x2000, 0x10);
+    cartridge.write(0x2000, 0x00);
     REQUIRE(cartridge.read(0x4000) == 0x11);
+
+    cartridge.write(0x2000, 0x10);
+    REQUIRE(cartridge.read(0x4000) == 0x10);
 
     cartridge.write(0x6000, 0x01);
     REQUIRE(cartridge.read(0x0000) == 0x10);
