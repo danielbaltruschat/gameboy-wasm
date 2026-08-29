@@ -36,7 +36,7 @@ uint8_t MemBus::read_dma_source(uint16_t addr) { return read_unchecked(addr); }
 void MemBus::update_open_bus(uint8_t value) { open_bus_value = value; }
 
 void MemBus::notify_cpu_address_bus(uint16_t addr, BusAccessType access_type) {
-    if (addr >= 0xFE00 && addr <= 0xFE9F) { // OAM access (FE00 - FE9F)
+    if (addr >= 0xFE00 && addr <= 0xFEFF) {
         ppu.notify_oam_bus_access(addr, access_type);
     }
 }

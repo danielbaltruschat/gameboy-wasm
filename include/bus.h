@@ -18,6 +18,7 @@ enum class BusAccessType {
     Read,
     Write,
     Internal,
+    ReadAndInternal,
 };
 
 

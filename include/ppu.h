@@ -12,6 +12,8 @@ public:
     static constexpr int width = 160;
     static constexpr int height = 144;
 
+    Framebuffer();
+
     void set_pixel(int x, int y, uint32_t rgba);
     const uint32_t* pixels() const;
 
@@ -59,6 +61,7 @@ private:
         uint8_t color = 0;
         uint8_t palette = 0;
         bool obj_to_bg_priority = false;
+        uint8_t object_x = 0xFF;
         uint8_t oam_index = 0xFF;
     };
 
@@ -71,9 +74,8 @@ private:
     struct ObjectCandidate {
         uint8_t y = 0;
         uint8_t x = 0;
-        uint8_t tile = 0;
-        uint8_t attributes = 0;
         uint8_t oam_index = 0;
+        uint8_t fetch_penalty = 0;
     };
 
     InterruptController& interrupts;
@@ -99,32 +101,41 @@ private:
     int dot_counter = 0;
     int mode3_dot_target = 172;
     int scx_discard_dots = 0;
-    int object_penalty_dots = 0;
+    int object_fetch_dots_remaining = 0;
+    int object_fetch_index = -1;
     uint8_t screen_x = 0;
+    uint8_t scanline = 0;
+    uint8_t oam_scan_index = 0;
     uint8_t window_line = 0;
+    bool window_y_triggered = false;
     bool window_triggered_this_line = false;
+    bool first_frame_blank = true;
     bool oam_dma_active = false;
     Mode mode = Mode::OamScan;
     PixelFetcher fetcher;
     PixelFifo bg_fifo;
     PixelFifo obj_fifo;
     std::array<ObjectCandidate, 10> line_objects{};
+    std::array<bool, 10> line_object_fetched{};
     uint8_t line_object_count = 0;
     bool stat_interrupt_line = false;
 
     bool lcd_enabled() const;
     bool vram_accessible() const;
     bool oam_accessible() const;
+    bool window_enabled() const;
     uint8_t stat_value() const;
     void set_mode(Mode next_mode);
+    bool stat_interrupt_active(uint8_t interrupt_selects) const;
     void update_stat_interrupt();
     void begin_scanline();
-    void evaluate_objects_for_line();
+    void scan_oam_entry();
     void tick_pixel_fetcher();
     void clear_fifos();
     void push_bg_pixels();
     void fetch_object_pixels(const ObjectCandidate& object);
+    bool tick_object_fetch();
     void mix_and_push_pixel();
-    int calculate_mode3_dot_target() const;
+    int calculate_mode3_dot_target();
     void corrupt_oam(BusAccessType access_type);
 };
