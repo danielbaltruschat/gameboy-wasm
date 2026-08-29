@@ -69,10 +69,10 @@ private:
     Memory& memory;
     OamDma oam_dma;
     uint8_t open_bus_value = 0xFF;
-    uint8_t dma_bus_value = 0xFF;
 
     uint8_t read_unchecked(uint16_t addr);
     void write_unchecked(uint16_t addr, uint8_t value);
-    void update_open_bus(uint8_t value);
-    uint8_t read_blocked_by_dma() const;
+    void update_open_bus(uint16_t addr, uint8_t value);
+    uint8_t read_blocked_by_dma(uint16_t addr);
+    void write_blocked_by_dma(uint8_t value);
 };

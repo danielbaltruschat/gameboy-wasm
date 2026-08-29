@@ -12,6 +12,8 @@ public:
 
     bool is_active() const;
     bool blocks_cpu_access(uint16_t addr) const;
+    bool uses_vram_bus() const;
+    uint16_t conflict_addr() const;
 
     uint8_t read_reg() const;
     bool copy_pending() const;
@@ -24,6 +26,7 @@ private:
     bool active = false;
     bool start_pending = false;
     bool restart_ready = false;
+    bool restart_warmup = false;
 
     uint8_t dma_reg = 0; // stored value of OAM DMA register at FF46 address
     uint16_t source_base = 0; // start address for DMA copy

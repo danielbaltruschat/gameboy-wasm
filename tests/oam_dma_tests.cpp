@@ -36,22 +36,42 @@ TEST_CASE("OAM DMA start waits one M-cycle before entering active state")
     REQUIRE(dma.pending_copy_count() == 0);
 }
 
-TEST_CASE("OAM DMA blocks CPU access outside HRAM while active")
+TEST_CASE("OAM DMA owns only its source bus after the warmup M-cycle")
 {
     OamDma dma;
 
     dma.start(0xC0);
     dma.tick_dots(4);
 
+    REQUIRE_FALSE(dma.blocks_cpu_access(0x0000));
+
+    dma.tick_dots(4);
+    dma.acknowledge_copy();
+
     REQUIRE(dma.blocks_cpu_access(0x0000));
-    REQUIRE(dma.blocks_cpu_access(0x8000));
+    REQUIRE_FALSE(dma.blocks_cpu_access(0x8000));
     REQUIRE(dma.blocks_cpu_access(0xC000));
     REQUIRE(dma.blocks_cpu_access(0xFE00));
-    REQUIRE(dma.blocks_cpu_access(0xFF00));
-    REQUIRE(dma.blocks_cpu_access(0xFFFF));
+    REQUIRE_FALSE(dma.blocks_cpu_access(0xFF00));
+    REQUIRE_FALSE(dma.blocks_cpu_access(0xFFFF));
 
     REQUIRE_FALSE(dma.blocks_cpu_access(0xFF80));
     REQUIRE_FALSE(dma.blocks_cpu_access(0xFFFE));
+}
+
+TEST_CASE("OAM DMA from VRAM leaves the external and IO buses available")
+{
+    OamDma dma;
+
+    dma.start(0x80);
+    dma.tick_dots(8);
+    dma.acknowledge_copy();
+
+    REQUIRE_FALSE(dma.blocks_cpu_access(0x0000));
+    REQUIRE(dma.blocks_cpu_access(0x8000));
+    REQUIRE_FALSE(dma.blocks_cpu_access(0xC000));
+    REQUIRE(dma.blocks_cpu_access(0xFE00));
+    REQUIRE_FALSE(dma.blocks_cpu_access(0xFF00));
 }
 
 TEST_CASE("OAM DMA does not block CPU access when inactive")
@@ -201,4 +221,6 @@ TEST_CASE("OAM DMA restart keeps the old transfer alive for the startup M-cycle"
     REQUIRE(dma.is_active());
     REQUIRE(dma.source_addr() == 0xD000);
     REQUIRE(dma.oam_offset() == 0);
+    REQUIRE(dma.blocks_cpu_access(0xFE00));
+    REQUIRE_FALSE(dma.blocks_cpu_access(0xD000));
 }

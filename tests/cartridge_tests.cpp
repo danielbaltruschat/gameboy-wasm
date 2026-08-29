@@ -211,6 +211,32 @@ TEST_CASE("MBC1 advanced mode banks the lower ROM window")
     REQUIRE(cartridge.read(0x4000) == 0x41);
 }
 
+TEST_CASE("MBC1 detects and maps multicart sub-ROM wiring")
+{
+    auto rom = make_rom(64, 0x01, 0x05);
+    constexpr std::size_t logo_offset = 0x0104;
+    constexpr std::size_t logo_size = 48;
+    constexpr std::size_t sub_rom_size = 0x40000;
+
+    for (std::size_t sub_rom = 1; sub_rom < 4; ++sub_rom) {
+        std::copy_n(
+            rom.begin() + logo_offset,
+            logo_size,
+            rom.begin() + sub_rom * sub_rom_size + logo_offset
+        );
+    }
+
+    Cartridge cartridge(rom);
+    REQUIRE(cartridge.get_capabilities().hasMbc1MulticartLayout);
+
+    cartridge.write(0x4000, 0x01);
+    cartridge.write(0x2000, 0x10);
+    REQUIRE(cartridge.read(0x4000) == 0x11);
+
+    cartridge.write(0x6000, 0x01);
+    REQUIRE(cartridge.read(0x0000) == 0x10);
+}
+
 TEST_CASE("MBC1 enables and banks external RAM")
 {
     Cartridge cartridge(make_rom(2, 0x03, 0x00, 0x03));
@@ -304,6 +330,34 @@ TEST_CASE("MBC3 switches ROM and external RAM banks")
     REQUIRE(cartridge.read(0xA000) == 0x20);
     cartridge.write(0x4000, 0x02);
     REQUIRE(cartridge.read(0xA000) == 0x22);
+}
+
+TEST_CASE("RTC MBC3 leaves RAM selections four through seven unmapped")
+{
+    Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x03));
+
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0x4000, 0x00);
+    cartridge.write(0xA000, 0x20);
+    cartridge.write(0x4000, 0x04);
+    cartridge.write(0xA000, 0x44);
+
+    REQUIRE(cartridge.read(0xA000) == 0xFF);
+
+    cartridge.write(0x4000, 0x00);
+    REQUIRE(cartridge.read(0xA000) == 0x20);
+}
+
+TEST_CASE("MBC3 without an RTC masks RAM bank selection to two bits")
+{
+    Cartridge cartridge(make_rom(8, 0x13, 0x02, 0x03));
+
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0x4000, 0x07);
+    cartridge.write(0xA000, 0x37);
+    cartridge.write(0x4000, 0x03);
+
+    REQUIRE(cartridge.read(0xA000) == 0x37);
 }
 
 TEST_CASE("MBC3 latches a stable RTC snapshot")

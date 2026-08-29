@@ -30,9 +30,12 @@ public:
 
     uint8_t read(uint16_t addr) const;
     void write(uint16_t addr, uint8_t value);
+    uint8_t read_vram_dma(uint16_t addr) const;
 
     void write_oam_dma(uint16_t offset, uint8_t value);
+    void write_oam_dma_conflict(uint8_t value);
     void set_oam_dma_active(bool active);
+    void set_oam_dma_active(bool active, uint16_t offset);
     void notify_oam_bus_access(uint16_t addr, BusAccessType access_type);
 
     const Framebuffer& get_framebuffer() const;
@@ -129,6 +132,7 @@ private:
     bool first_frame_blank = true;
     bool startup_line = false;
     bool oam_dma_active = false;
+    bool object_fetch_aborted = false;
     bool vram_read_blocked = false;
     bool vram_write_blocked = false;
     bool oam_read_blocked = false;
@@ -151,6 +155,8 @@ private:
     bool stat_interrupt_line = false;
     uint8_t pending_stat = 0;
     int stat_write_dots_remaining = 0;
+    int oam_dma_offset = 0;
+    int accessed_oam_row = -1;
 
     bool lcd_enabled() const;
     bool vram_accessible() const;
@@ -179,5 +185,6 @@ private:
     bool tick_object_fetch();
     void mix_and_push_pixel();
     void finish_drawing_if_complete();
+    uint8_t read_oam_ppu(uint16_t offset) const;
     void corrupt_oam(BusAccessType access_type);
 };

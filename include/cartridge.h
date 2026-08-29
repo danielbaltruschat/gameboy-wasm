@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -72,6 +73,7 @@ public:
     void tick_rtc_seconds(uint32_t seconds);
 
     uint8_t read(uint16_t address) const;
+    std::optional<uint8_t> read_bus(uint16_t address) const;
     void write(uint16_t address, uint8_t value);
 
     const CartridgeHeader& get_header() const;
@@ -99,7 +101,7 @@ private:
     std::size_t effective_rom_offset(uint16_t address) const;
     std::size_t effective_ram_offset(uint16_t address) const;
 
-    uint8_t read_external_ram(uint16_t address) const;
+    std::optional<uint8_t> read_external_ram(uint16_t address) const;
     void write_external_ram(uint16_t address, uint8_t value);
     uint8_t read_rtc_register() const;
     void write_rtc_register(uint8_t value);

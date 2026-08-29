@@ -42,18 +42,18 @@ TEST_CASE("InterruptController writes only preserve lower five IF bits")
     REQUIRE(interrupts.read_if() == 0xE0);
 }
 
-TEST_CASE("InterruptController writes only preserve lower five IE bits")
+TEST_CASE("InterruptController IE preserves all eight storage bits")
 {
     InterruptController interrupts;
 
     interrupts.reset();
     interrupts.write_ie(0xFF);
 
-    REQUIRE(interrupts.read_ie() == 0x1F);
+    REQUIRE(interrupts.read_ie() == 0xFF);
 
     interrupts.write_ie(0xA0);
 
-    REQUIRE(interrupts.read_ie() == 0x00);
+    REQUIRE(interrupts.read_ie() == 0xA0);
 }
 
 TEST_CASE("InterruptController request sets the matching IF bit")

@@ -273,3 +273,42 @@ TEST_CASE("Joypad pressing an already pressed selected button does not request a
     REQUIRE((interrupts.read_if() & 0x10) == 0x00);
     REQUIRE_FALSE(interrupts.highest_priority_pending().has_value());
 }
+
+TEST_CASE("Joypad keeps both groups connected during the DMG selection delay")
+{
+    InterruptController interrupts;
+    Joypad joypad(interrupts);
+
+    interrupts.reset();
+    joypad.reset();
+    joypad.write(0x20);
+    joypad.set_button(JoypadButton::Right, true);
+
+    joypad.write(0x10);
+    REQUIRE((joypad.read() & 0x30) == 0x10);
+    REQUIRE((joypad.read() & 0x01) == 0x00);
+
+    joypad.tick_dots(47);
+    REQUIRE((joypad.read() & 0x01) == 0x00);
+
+    joypad.tick_dots(1);
+    REQUIRE((joypad.read() & 0x01) == 0x01);
+}
+
+TEST_CASE("Joypad uses the shorter DMG delay when switching to the d-pad")
+{
+    InterruptController interrupts;
+    Joypad joypad(interrupts);
+
+    interrupts.reset();
+    joypad.reset();
+    joypad.write(0x10);
+    joypad.set_button(JoypadButton::A, true);
+
+    joypad.write(0x20);
+    joypad.tick_dots(23);
+    REQUIRE((joypad.read() & 0x01) == 0x00);
+
+    joypad.tick_dots(1);
+    REQUIRE((joypad.read() & 0x01) == 0x01);
+}

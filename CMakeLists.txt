@@ -46,6 +46,7 @@ if(BUILD_TESTING)
   add_executable(gameboy_tests
         "tests/tests.cpp"
         "tests/boot_rom_tests.cpp"
+        "tests/bus_tests.cpp"
         "tests/cartridge_tests.cpp"
         "tests/cputests.cpp"
         "tests/interrupt_controller_tests.cpp"

@@ -1,5 +1,6 @@
 #include "cartridge.h"
 
+#include <algorithm>
 #include <cassert>
 #include <utility>
 
@@ -8,6 +9,35 @@ namespace {
 constexpr std::size_t minimum_header_size = 0x150;
 constexpr std::size_t rom_bank_size = 0x4000;
 constexpr std::size_t ram_bank_size = 0x2000;
+
+bool has_mbc1_multicart_layout(const std::vector<uint8_t>& rom) {
+    constexpr std::size_t logo_offset = 0x0104;
+    constexpr std::size_t logo_size = 48;
+    constexpr std::size_t sub_rom_size = 0x40000;
+
+    if (rom.size() < 4 * sub_rom_size) {
+        return false;
+    }
+
+    for (
+        std::size_t offset = sub_rom_size;
+        offset <= 3 * sub_rom_size;
+        offset += sub_rom_size
+    ) {
+        if (
+            offset + logo_offset + logo_size <= rom.size() &&
+            std::equal(
+                rom.begin() + logo_offset,
+                rom.begin() + logo_offset + logo_size,
+                rom.begin() + offset + logo_offset
+            )
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 } // namespace
 
@@ -156,6 +186,10 @@ void Cartridge::configure_mapper() {
         break;
     }
 
+    if (capabilities.mapper == MapperType::Mbc1) {
+        capabilities.hasMbc1MulticartLayout = has_mbc1_multicart_layout(rom);
+    }
+
     if (capabilities.hasRam && capabilities.mapper != MapperType::Mbc2) {
         ram.assign(header.ramSizeBytes, 0);
     } else {
@@ -178,20 +212,26 @@ void Cartridge::reset_mapper() {
 }
 
 uint8_t Cartridge::read(uint16_t address) const {
+    return read_bus(address).value_or(0xFF);
+}
+
+std::optional<uint8_t> Cartridge::read_bus(uint16_t address) const {
     if (!loaded()) {
-        return 0xFF;
+        return std::nullopt;
     }
 
     if (address <= 0x7FFF) {
         const std::size_t offset = effective_rom_offset(address);
-        return offset < rom.size() ? rom[offset] : 0xFF;
+        return offset < rom.size()
+            ? std::optional<uint8_t>{rom[offset]}
+            : std::nullopt;
     }
 
     if (address >= 0xA000 && address <= 0xBFFF) {
         return read_external_ram(address);
     }
 
-    return 0xFF;
+    return std::nullopt;
 }
 
 void Cartridge::write(uint16_t address, uint8_t value) {
@@ -216,9 +256,6 @@ void Cartridge::write(uint16_t address, uint8_t value) {
             ram_enabled = (value & 0x0F) == 0x0A;
         } else if (address <= 0x3FFF) {
             mbc1.lower_rom_bank_bits = value & 0x1F;
-            if (mbc1.lower_rom_bank_bits == 0) {
-                mbc1.lower_rom_bank_bits = 1;
-            }
         } else if (address <= 0x5FFF) {
             mbc1.upper_bank_bits = value & 0x03;
         } else {
@@ -307,11 +344,18 @@ std::size_t Cartridge::effective_rom_offset(uint16_t address) const {
 
     if (address >= 0x4000) {
         switch (capabilities.mapper) {
-        case MapperType::Mbc1:
+        case MapperType::Mbc1: {
+            const int upper_shift = capabilities.hasMbc1MulticartLayout ? 4 : 5;
+            const uint8_t lower_mask = capabilities.hasMbc1MulticartLayout ? 0x0F : 0x1F;
+            uint8_t lower_bank = mbc1.lower_rom_bank_bits & lower_mask;
+            if (lower_bank == 0) {
+                lower_bank = 1;
+            }
             bank =
-                (static_cast<std::size_t>(mbc1.upper_bank_bits) << 5) |
-                mbc1.lower_rom_bank_bits;
+                (static_cast<std::size_t>(mbc1.upper_bank_bits) << upper_shift) |
+                lower_bank;
             break;
+        }
         case MapperType::Mbc2:
         case MapperType::Mbc3:
             bank = rom_bank;
@@ -324,7 +368,8 @@ std::size_t Cartridge::effective_rom_offset(uint16_t address) const {
             break;
         }
     } else if (capabilities.mapper == MapperType::Mbc1 && mbc1.banking_mode != 0) {
-        bank = static_cast<std::size_t>(mbc1.upper_bank_bits) << 5;
+        const int upper_shift = capabilities.hasMbc1MulticartLayout ? 4 : 5;
+        bank = static_cast<std::size_t>(mbc1.upper_bank_bits) << upper_shift;
     }
 
     const std::size_t bank_count = (rom.size() + rom_bank_size - 1) / rom_bank_size;
@@ -349,7 +394,7 @@ std::size_t Cartridge::effective_ram_offset(uint16_t address) const {
         }
         break;
     case MapperType::Mbc3:
-        bank = ram_bank;
+        bank = ram_bank & 0x03;
         break;
     case MapperType::Mbc5:
         bank = mbc5.ram_bank;
@@ -363,42 +408,47 @@ std::size_t Cartridge::effective_ram_offset(uint16_t address) const {
     return (bank * ram_bank_size + (address - 0xA000)) % ram.size();
 }
 
-uint8_t Cartridge::read_external_ram(uint16_t address) const {
+std::optional<uint8_t> Cartridge::read_external_ram(uint16_t address) const {
     assert(address >= 0xA000 && address <= 0xBFFF);
 
     switch (capabilities.mapper) {
     case MapperType::RomOnly:
         if (ram.empty()) {
-            return 0xFF;
+            return std::nullopt;
         }
         return ram[effective_ram_offset(address)];
     case MapperType::Mbc2:
         if (!ram_enabled) {
-            return 0xFF;
+            return std::nullopt;
         }
         return 0xF0 | (mbc2.ram[(address - 0xA000) & 0x01FF] & 0x0F);
     case MapperType::Mbc3:
         if (!ram_enabled) {
-            return 0xFF;
+            return std::nullopt;
         }
         if (rtc_register_select >= 0x08 && rtc_register_select <= 0x0C) {
-            return capabilities.hasTimer ? read_rtc_register() : 0xFF;
+            return capabilities.hasTimer
+                ? std::optional<uint8_t>{read_rtc_register()}
+                : std::nullopt;
         }
         if (rtc_register_select > 0x07 || ram.empty()) {
+            return std::nullopt;
+        }
+        if (capabilities.hasTimer && rtc_register_select > 0x03) {
             return 0xFF;
         }
         return ram[effective_ram_offset(address)];
     case MapperType::Mbc1:
     case MapperType::Mbc5:
         if (!ram_enabled || ram.empty()) {
-            return 0xFF;
+            return std::nullopt;
         }
         return ram[effective_ram_offset(address)];
     case MapperType::Unknown:
-        return 0xFF;
+        return std::nullopt;
     }
 
-    return 0xFF;
+    return std::nullopt;
 }
 
 void Cartridge::write_external_ram(uint16_t address, uint8_t value) {
@@ -423,7 +473,11 @@ void Cartridge::write_external_ram(uint16_t address, uint8_t value) {
             if (capabilities.hasTimer) {
                 write_rtc_register(value);
             }
-        } else if (rtc_register_select <= 0x07 && !ram.empty()) {
+        } else if (
+            rtc_register_select <= 0x07 &&
+            (!capabilities.hasTimer || rtc_register_select <= 0x03) &&
+            !ram.empty()
+        ) {
             ram[effective_ram_offset(address)] = value;
         }
         break;

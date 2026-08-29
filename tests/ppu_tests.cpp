@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cstdint>
 
 #include "interrupt_controller.h"
@@ -178,7 +179,7 @@ TEST_CASE("PPU LY is read-only")
     REQUIRE(ppu.read(ly) == 1);
 }
 
-TEST_CASE("PPU returns open bus for addresses outside its mapped registers and memory")
+TEST_CASE("PPU exposes DMG-B values outside its mapped registers and memory")
 {
     InterruptController interrupts;
     PPU ppu(interrupts);
@@ -188,7 +189,7 @@ TEST_CASE("PPU returns open bus for addresses outside its mapped registers and m
 
     REQUIRE(ppu.read(0x7FFF) == 0xFF);
     REQUIRE(ppu.read(0xA000) == 0xFF);
-    REQUIRE(ppu.read(0xFEA0) == 0xFF);
+    REQUIRE(ppu.read(0xFEA0) == 0x00);
     REQUIRE(ppu.read(0xFF46) == 0xFF);
 }
 
@@ -361,6 +362,33 @@ TEST_CASE("PPU disables CPU OAM access in modes 2 and 3 and VRAM access in mode 
 
     REQUIRE(ppu.read(0x8000) == 0x77);
     REQUIRE(ppu.read(0xFE00) == 0x88);
+}
+
+TEST_CASE("PPU applies the late DMG mode 2 read and write access phases")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    ppu.write(0x8000, 0x11);
+    ppu.write(0xFE00, 0x22);
+    ppu.write(lcdc, 0x80);
+    tick_to_first_normal_line(ppu);
+
+    ppu.tick_dots(75);
+    REQUIRE(ppu.read(0x8000) == 0x11);
+    ppu.write(0xFE00, 0x33);
+
+    ppu.tick_dots(1);
+    REQUIRE(ppu.read(0x8000) == 0xFF);
+    REQUIRE(ppu.read(0xFE00) == 0xFF);
+    ppu.write(0x8000, 0x44);
+    ppu.write(0xFE00, 0x55);
+
+    ppu.write(lcdc, 0x00);
+    REQUIRE(ppu.read(0x8000) == 0x44);
+    REQUIRE(ppu.read(0xFE00) == 0x55);
 }
 
 TEST_CASE("PPU DMA writes bypass CPU OAM access restrictions")
@@ -860,7 +888,7 @@ TEST_CASE("PPU renders an object at its OAM position")
     REQUIRE(pixels[7] != pixels[8]);
 }
 
-TEST_CASE("PPU object attribute fetches lose OAM access during DMA")
+TEST_CASE("PPU object attribute fetches use the current DMA OAM word")
 {
     InterruptController interrupts;
     PPU ppu(interrupts);
@@ -871,7 +899,7 @@ TEST_CASE("PPU object attribute fetches lose OAM access during DMA")
     write_solid_tile(ppu, 1, 1);
     ppu.write(oam_start, 16);
     ppu.write(oam_start + 1, 8);
-    ppu.write(oam_start + 2, 1);
+    ppu.write(oam_start + 2, 2);
     ppu.write(bgp, 0xE4);
     ppu.write(obp0, 0xE4);
     ppu.write(lcdc, 0x93);
@@ -879,11 +907,12 @@ TEST_CASE("PPU object attribute fetches lose OAM access during DMA")
     tick_to_second_frame(ppu);
     ppu.tick_dots(79);
     ppu.set_oam_dma_active(true);
+    ppu.write_oam_dma(0, 1);
     ppu.tick_dots(377);
     ppu.set_oam_dma_active(false);
 
     const uint32_t* pixels = ppu.get_framebuffer().pixels();
-    REQUIRE(pixels[0] == pixels[8]);
+    REQUIRE(pixels[0] != pixels[8]);
 }
 
 TEST_CASE("PPU hides a low-priority object behind a nonzero background pixel")
@@ -1226,6 +1255,67 @@ TEST_CASE("PPU object fetching extends mode 3")
     REQUIRE(current_mode(ppu) == hblank_mode);
 }
 
+TEST_CASE("PPU object fetch timing follows the background fetch alignment")
+{
+    struct TimingCase {
+        uint8_t object_x;
+        int hblank_dot;
+    };
+
+    constexpr std::array cases{
+        TimingCase{8, 263},
+        TimingCase{9, 262},
+        TimingCase{10, 261},
+        TimingCase{11, 260},
+        TimingCase{12, 259},
+        TimingCase{13, 258},
+        TimingCase{14, 258},
+        TimingCase{15, 258},
+        TimingCase{16, 263},
+    };
+
+    for (const auto& test_case : cases) {
+        InterruptController interrupts;
+        PPU ppu(interrupts);
+
+        interrupts.reset();
+        ppu.reset();
+        clear_oam(ppu);
+        ppu.write(oam_start, 17);
+        ppu.write(oam_start + 1, test_case.object_x);
+        ppu.write(lcdc, 0x82);
+        tick_to_first_normal_line(ppu);
+
+        ppu.tick_dots(test_case.hblank_dot - 1);
+        REQUIRE(current_mode(ppu) == drawing_mode);
+        ppu.tick_dots(1);
+        REQUIRE(current_mode(ppu) == hblank_mode);
+    }
+}
+
+TEST_CASE("PPU latches an object fetch cancel when LCDC object enable falls")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    clear_oam(ppu);
+    ppu.write(oam_start, 17);
+    ppu.write(oam_start + 1, 8);
+    ppu.write(lcdc, 0x82);
+    tick_to_first_normal_line(ppu);
+
+    ppu.tick_dots(93);
+    ppu.write(lcdc, 0x80);
+    ppu.write(lcdc, 0x82);
+    ppu.tick_dots(159);
+
+    REQUIRE(current_mode(ppu) == drawing_mode);
+    ppu.tick_dots(1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+}
+
 TEST_CASE("PPU charges only the flat object cost twice within one background tile")
 {
     InterruptController interrupts;
@@ -1316,7 +1406,86 @@ TEST_CASE("PPU applies the DMG OAM read corruption pattern during mode 2")
     ppu.notify_oam_bus_access(0xFE00, BusAccessType::Read);
     ppu.tick_dots(244);
 
-    REQUIRE(read_oam_word(ppu, 16) == static_cast<uint16_t>(0x0F0F | (0xAAAA & 0x3333)));
+    const uint16_t expected = static_cast<uint16_t>(
+        0x0F0F & (0xAAAA | 0x3333)
+    );
+    REQUIRE(read_oam_word(ppu, 16) == expected);
+}
+
+TEST_CASE("PPU applies the deterministic DMG-B tertiary OAM read pattern")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    const uint16_t a = 0xAAAA;
+    const uint16_t b = 0x0F0F;
+    const uint16_t c = 0x3333;
+    const uint16_t d = 0x5555;
+    const uint16_t e = 0x00FF;
+    const uint16_t expected = static_cast<uint16_t>(
+        (c & (a | b | d | e)) | (a & b & d & e)
+    );
+
+    write_oam_word(ppu, 0, e);
+    write_oam_word(ppu, 16, d);
+    write_oam_word(ppu, 24, c);
+    write_oam_word(ppu, 28, b);
+    write_oam_word(ppu, 32, a);
+    ppu.write(lcdc, 0x80);
+    tick_to_first_normal_line(ppu);
+    ppu.tick_dots(16);
+
+    ppu.notify_oam_bus_access(0xFE00, BusAccessType::Read);
+    ppu.write(lcdc, 0x00);
+
+    REQUIRE(read_oam_word(ppu, 32) == expected);
+}
+
+TEST_CASE("PPU applies the deterministic DMG-B quaternary OAM read pattern")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    const uint16_t current = 0xAAAA;
+    const uint16_t current_minus_four = 0x0F0F;
+    const uint16_t current_minus_six = 0xF0F0;
+    const uint16_t current_minus_eight = 0x3333;
+    const uint16_t current_minus_fourteen = 0x5555;
+    const uint16_t current_minus_sixteen = 0x00FF;
+    const uint16_t current_minus_thirty_two = 0x3C3C;
+    const uint16_t expected = static_cast<uint16_t>(
+        (
+            current_minus_eight &
+            (
+                current_minus_thirty_two |
+                current_minus_sixteen |
+                static_cast<uint16_t>(~current_minus_six & current_minus_fourteen) |
+                current_minus_four |
+                current
+            )
+        ) |
+        (current_minus_four & current_minus_sixteen & current_minus_thirty_two)
+    );
+
+    write_oam_word(ppu, 32, current_minus_thirty_two);
+    write_oam_word(ppu, 48, current_minus_sixteen);
+    write_oam_word(ppu, 50, current_minus_fourteen);
+    write_oam_word(ppu, 56, current_minus_eight);
+    write_oam_word(ppu, 58, current_minus_six);
+    write_oam_word(ppu, 60, current_minus_four);
+    write_oam_word(ppu, 64, current);
+    ppu.write(lcdc, 0x80);
+    tick_to_first_normal_line(ppu);
+    ppu.tick_dots(32);
+
+    ppu.notify_oam_bus_access(0xFE00, BusAccessType::Read);
+    ppu.write(lcdc, 0x00);
+
+    REQUIRE(read_oam_word(ppu, 64) == expected);
 }
 
 TEST_CASE("PPU applies combined DMG OAM read and internal corruption")

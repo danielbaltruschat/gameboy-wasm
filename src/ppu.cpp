@@ -78,6 +78,7 @@ void PPU::reset() {
     first_frame_blank = true;
     startup_line = false;
     oam_dma_active = false;
+    object_fetch_aborted = false;
     vram_read_blocked = false;
     vram_write_blocked = false;
     oam_read_blocked = false;
@@ -103,6 +104,8 @@ void PPU::reset() {
     stat_interrupt_line = false;
     pending_stat = 0;
     stat_write_dots_remaining = 0;
+    oam_dma_offset = 0;
+    accessed_oam_row = -1;
 }
 
 void PPU::tick_dots(int dots) {
@@ -239,6 +242,10 @@ uint8_t PPU::read(uint16_t addr) const {
         return oam_accessible() ? oam[addr - 0xFE00] : 0xFF;
     }
 
+    if (addr >= 0xFEA0 && addr <= 0xFEFF) {
+        return oam_accessible() ? 0x00 : 0xFF;
+    }
+
     switch (addr) {
         case 0xFF40: return lcdc;
         case 0xFF41: return stat_value();
@@ -253,6 +260,11 @@ uint8_t PPU::read(uint16_t addr) const {
         case 0xFF4B: return wx;
         default: return 0xFF;
     }
+}
+
+uint8_t PPU::read_vram_dma(uint16_t addr) const {
+    assert(addr >= 0x8000 && addr <= 0x9FFF);
+    return vram[addr - 0x8000];
 }
 
 void PPU::write(uint16_t addr, uint8_t value) {
@@ -273,7 +285,16 @@ void PPU::write(uint16_t addr, uint8_t value) {
     switch (addr) {
         case 0xFF40: {
             const bool was_enabled = lcd_enabled();
+            const bool objects_were_enabled = (lcdc & 0x02) != 0;
             lcdc = value;
+
+            if (
+                objects_were_enabled &&
+                (lcdc & 0x02) == 0 &&
+                object_fetch_step != ObjectFetchStep::None
+            ) {
+                object_fetch_aborted = true;
+            }
 
             if (was_enabled && !lcd_enabled()) {
                 ly = 0;
@@ -297,6 +318,10 @@ void PPU::write(uint16_t addr, uint8_t value) {
                 set_mode(Mode::HBlank);
                 set_access_blocking(false, false);
                 clear_fifos();
+                object_fetch_step = ObjectFetchStep::None;
+                object_fetch_index = -1;
+                object_fetch_aborted = false;
+                accessed_oam_row = -1;
             } else if (!was_enabled && lcd_enabled()) {
                 ly = 0;
                 scanline = 0;
@@ -366,19 +391,47 @@ void PPU::write(uint16_t addr, uint8_t value) {
 void PPU::write_oam_dma(uint16_t offset, uint8_t value) {
     assert(offset < oam.size());
     oam[offset] = value;
+    oam_dma_offset = offset + 1;
+}
+
+void PPU::write_oam_dma_conflict(uint8_t value) {
+    assert(oam_dma_active);
+    assert(oam_dma_offset > 0 && oam_dma_offset <= static_cast<int>(oam.size()));
+    oam[oam_dma_offset - 1] &= value;
 }
 
 void PPU::set_oam_dma_active(bool active) {
+    if (active && !oam_dma_active) {
+        oam_dma_offset = 0;
+    }
     oam_dma_active = active;
+    if (!active) {
+        oam_dma_offset = 0;
+    }
+}
+
+void PPU::set_oam_dma_active(bool active, uint16_t offset) {
+    assert(offset <= oam.size());
+    oam_dma_active = active;
+    oam_dma_offset = active ? offset : 0;
 }
 
 void PPU::notify_oam_bus_access(uint16_t addr, BusAccessType access_type) {
     assert(addr >= 0xFE00 && addr <= 0xFEFF);
 
+    const bool read_access =
+        access_type == BusAccessType::Read ||
+        access_type == BusAccessType::ReadAndInternal;
+    const bool blocked_access = read_access
+        ? oam_read_blocked
+        : oam_write_blocked;
+
     if (
         lcd_enabled() &&
         mode == Mode::OamScan &&
-        !oam_dma_active
+        blocked_access &&
+        !oam_dma_active &&
+        accessed_oam_row < static_cast<int>(oam.size())
     ) {
         corrupt_oam(access_type);
     }
@@ -460,7 +513,9 @@ void PPU::begin_scanline() {
     object_fetch_index = -1;
     object_fetch_alignment_dots = 0;
     object_fetch_step = ObjectFetchStep::None;
+    object_fetch_aborted = false;
     oam_scan_index = 0;
+    accessed_oam_row = 0;
     if (ly == wy) {
         window_y_triggered = true;
     }
@@ -483,7 +538,7 @@ void PPU::scan_oam_entry() {
 
     const int object_height = (lcdc & 0x04) != 0 ? 16 : 8;
     const uint16_t offset = static_cast<uint16_t>(oam_scan_index) * 4;
-    const uint8_t object_y = oam_dma_active ? 0xFF : oam[offset];
+    const uint8_t object_y = read_oam_ppu(offset);
     const int object_top = static_cast<int>(object_y) - 16;
 
     if (
@@ -493,10 +548,15 @@ void PPU::scan_oam_entry() {
     ) {
         ObjectCandidate& object = line_objects[line_object_count++];
         object.y = object_y;
-        object.x = oam_dma_active ? 0xFF : oam[offset + 1];
+        object.x = read_oam_ppu(offset + 1);
         object.oam_index = oam_scan_index;
     }
 
+    accessed_oam_row = (oam_scan_index & ~1) * 4 + 8;
+    if (oam_scan_index == 37) {
+        vram_read_blocked = true;
+        oam_write_blocked = false;
+    }
     oam_scan_index++;
 }
 
@@ -510,6 +570,8 @@ void PPU::begin_mode3() {
     object_fetch_index = -1;
     object_fetch_alignment_dots = 0;
     object_fetch_step = ObjectFetchStep::None;
+    object_fetch_aborted = false;
+    accessed_oam_row = -1;
     fetcher = {};
     clear_fifos();
     push_blank_bg_pixels();
@@ -864,9 +926,10 @@ bool PPU::tick_object_fetch() {
         return false;
     }
 
-    if ((lcdc & 0x02) == 0) {
+    if (object_fetch_aborted) {
         object_fetch_step = ObjectFetchStep::None;
         object_fetch_index = -1;
+        object_fetch_aborted = false;
         mix_and_push_pixel();
         advance_pixel_fetcher();
         finish_drawing_if_complete();
@@ -887,8 +950,8 @@ bool PPU::tick_object_fetch() {
         break;
     case ObjectFetchStep::OamFirst: {
         const uint16_t offset = static_cast<uint16_t>(object.oam_index) * 4;
-        object_tile = oam_dma_active ? 0xFF : oam[offset + 2];
-        object_attributes = oam_dma_active ? 0xFF : oam[offset + 3];
+        object_tile = read_oam_ppu(offset + 2);
+        object_attributes = read_oam_ppu(offset + 3);
         object_fetch_step = ObjectFetchStep::OamSecond;
         break;
     }
@@ -1005,64 +1068,146 @@ void PPU::mix_and_push_pixel() {
     pixel_position++;
 }
 
+uint8_t PPU::read_oam_ppu(uint16_t offset) const {
+    assert(offset < oam.size());
+
+    if (
+        oam_dma_active &&
+        oam_dma_offset > 0 &&
+        oam_dma_offset < static_cast<int>(oam.size())
+    ) {
+        const int dma_word_offset = oam_dma_offset & ~1;
+        return oam[dma_word_offset | (offset & 1)];
+    }
+
+    return oam[offset];
+}
+
 void PPU::corrupt_oam(BusAccessType access_type) {
     assert(mode == Mode::OamScan);
     assert(dot_counter >= 0 && dot_counter < 80);
 
-    const int row = dot_counter / 4;
-    if (row == 0) {
+    if (accessed_oam_row < 8) {
         return;
     }
 
     const auto read_word = [this](int offset) {
+        assert(offset >= 0 && offset + 1 < static_cast<int>(oam.size()));
         return static_cast<uint16_t>(
             oam[offset] |
             static_cast<uint16_t>(oam[offset + 1]) << 8
         );
     };
     const auto write_word = [this](int offset, uint16_t value) {
+        assert(offset >= 0 && offset + 1 < static_cast<int>(oam.size()));
         oam[offset] = value & 0xFF;
         oam[offset + 1] = value >> 8;
     };
+    const auto copy_row = [this](int destination, int source) {
+        assert(destination >= 0 && destination + 7 < static_cast<int>(oam.size()));
+        assert(source >= 0 && source + 7 < static_cast<int>(oam.size()));
+        for (int byte = 0; byte < 8; ++byte) {
+            oam[destination + byte] = oam[source + byte];
+        }
+    };
+
+    const int current_row = accessed_oam_row;
 
     if (
         access_type == BusAccessType::ReadAndInternal &&
-        row >= 4 &&
-        row < 19
+        current_row >= 32 &&
+        current_row < 152
     ) {
-        const int two_rows_before = (row - 2) * 8;
-        const int previous_row = (row - 1) * 8;
-        const int current_row = row * 8;
-        const uint16_t a = read_word(two_rows_before);
-        const uint16_t b = read_word(previous_row);
+        const uint16_t a = read_word(current_row - 16);
+        const uint16_t b = read_word(current_row - 8);
         const uint16_t c = read_word(current_row);
-        const uint16_t d = read_word(previous_row + 4);
-        const uint16_t corrupted_previous_word = static_cast<uint16_t>(
+        const uint16_t d = read_word(current_row - 4);
+        write_word(current_row - 8, static_cast<uint16_t>(
             (b & (a | c | d)) | (a & c & d)
-        );
-
-        write_word(previous_row, corrupted_previous_word);
-        for (int word = 0; word < 4; ++word) {
-            const uint16_t value = read_word(previous_row + word * 2);
-            write_word(current_row + word * 2, value);
-            write_word(two_rows_before + word * 2, value);
-        }
+        ));
+        copy_row(current_row, current_row - 8);
+        copy_row(current_row - 16, current_row - 8);
     }
 
-    const int current_row = row * 8;
-    const int previous_row = current_row - 8;
-    const uint16_t a = read_word(current_row);
-    const uint16_t b = read_word(previous_row);
-    const uint16_t c = read_word(previous_row + 4);
     const bool read_corruption =
         access_type == BusAccessType::Read ||
         access_type == BusAccessType::ReadAndInternal;
-    const uint16_t corrupted_first_word = read_corruption
-        ? static_cast<uint16_t>(b | (a & c))
-        : static_cast<uint16_t>(((a ^ c) & (b ^ c)) ^ c);
 
-    write_word(current_row, corrupted_first_word);
-    for (int word = 1; word < 4; ++word) {
-        write_word(current_row + word * 2, read_word(previous_row + word * 2));
+    if (!read_corruption) {
+        const uint16_t a = read_word(current_row);
+        const uint16_t b = read_word(current_row - 8);
+        const uint16_t c = read_word(current_row - 4);
+        write_word(current_row, static_cast<uint16_t>(((a ^ c) & (b ^ c)) ^ c));
+        for (int byte = 2; byte < 8; ++byte) {
+            oam[current_row + byte] = oam[current_row - 8 + byte];
+        }
+        return;
+    }
+
+    if ((current_row & 0x18) == 0x10 && current_row < 0x98) {
+        const uint16_t a = read_word(current_row - 16);
+        const uint16_t b = read_word(current_row - 8);
+        const uint16_t c = read_word(current_row);
+        const uint16_t d = read_word(current_row - 4);
+        write_word(current_row - 8, static_cast<uint16_t>(
+            (b & (a | c | d)) | (a & c & d)
+        ));
+        copy_row(current_row - 16, current_row - 8);
+    } else if ((current_row & 0x18) == 0x00 && current_row < 0x98) {
+        const uint16_t a = read_word(current_row);
+        const uint16_t b = read_word(current_row - 4);
+        const uint16_t c = read_word(current_row - 8);
+        const uint16_t d = read_word(current_row - 16);
+        const uint16_t e = read_word(current_row - 32);
+        uint16_t value = 0;
+
+        if (current_row == 0x40) {
+            const uint16_t current = read_word(current_row);
+            const uint16_t current_minus_four = read_word(current_row - 4);
+            const uint16_t current_minus_six = read_word(current_row - 6);
+            const uint16_t current_minus_eight = read_word(current_row - 8);
+            const uint16_t f = read_word(current_row - 14);
+            const uint16_t g = read_word(current_row - 16);
+            const uint16_t h = read_word(current_row - 32);
+            value = static_cast<uint16_t>(
+                (
+                    current_minus_eight &
+                    (
+                        h |
+                        g |
+                        static_cast<uint16_t>(~current_minus_six & f) |
+                        current_minus_four |
+                        current
+                    )
+                ) |
+                (current_minus_four & g & h)
+            );
+        } else if (current_row == 0x20) {
+            value = static_cast<uint16_t>(
+                (c & (a | b | d | e)) | (a & b & d & e)
+            );
+        } else if (current_row == 0x60) {
+            value = static_cast<uint16_t>(
+                (c & (a | b | d | e)) | (b & d & e)
+            );
+        } else {
+            value = static_cast<uint16_t>(c | (a & b & d & e));
+        }
+
+        write_word(current_row - 8, value);
+        copy_row(current_row - 16, current_row - 8);
+        copy_row(current_row - 32, current_row - 8);
+    } else {
+        const uint16_t a = read_word(current_row);
+        const uint16_t b = read_word(current_row - 8);
+        const uint16_t c = read_word(current_row - 4);
+        const uint16_t value = static_cast<uint16_t>(b | (a & c));
+        write_word(current_row - 8, value);
+        write_word(current_row, value);
+    }
+
+    copy_row(current_row, current_row - 8);
+    if (current_row == 0x80) {
+        copy_row(0, current_row);
     }
 }

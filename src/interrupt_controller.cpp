@@ -11,7 +11,7 @@ void InterruptController::write_if(uint8_t value) { IF = value & 0x1F; } // Only
 
 uint8_t InterruptController::read_ie() const { return IE; }
 
-void InterruptController::write_ie(uint8_t value) { IE = value & 0x1F; } // Only lower 5 bits matter
+void InterruptController::write_ie(uint8_t value) { IE = value; }
 
 void InterruptController::request(Interrupt i) {
     //set bit in IF
