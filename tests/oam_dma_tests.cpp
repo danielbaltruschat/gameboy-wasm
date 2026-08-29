@@ -16,14 +16,20 @@ TEST_CASE("OAM reset clears transfer state")
     REQUIRE(dma.oam_offset() == 0);
 }
 
-TEST_CASE("OAM DMA start stores source page and enters active state")
+TEST_CASE("OAM DMA start waits one M-cycle before entering active state")
 {
     OamDma dma;
 
     dma.start(0xC0);
 
-    REQUIRE(dma.is_active());
+    REQUIRE_FALSE(dma.is_active());
     REQUIRE(dma.read_reg() == 0xC0);
+
+    dma.tick_dots(3);
+    REQUIRE_FALSE(dma.is_active());
+
+    dma.tick_dots(1);
+    REQUIRE(dma.is_active());
     REQUIRE(dma.source_addr() == 0xC000);
     REQUIRE(dma.oam_offset() == 0);
     REQUIRE_FALSE(dma.copy_pending());
@@ -35,6 +41,7 @@ TEST_CASE("OAM DMA blocks CPU access outside HRAM while active")
     OamDma dma;
 
     dma.start(0xC0);
+    dma.tick_dots(4);
 
     REQUIRE(dma.blocks_cpu_access(0x0000));
     REQUIRE(dma.blocks_cpu_access(0x8000));
@@ -63,6 +70,7 @@ TEST_CASE("OAM DMA schedules one copy every four dots")
     OamDma dma;
 
     dma.start(0x80);
+    dma.tick_dots(4);
 
     dma.tick_dots(3);
     REQUIRE_FALSE(dma.copy_pending());
@@ -80,6 +88,7 @@ TEST_CASE("OAM DMA carries partial dots between ticks")
     OamDma dma;
 
     dma.start(0x90);
+    dma.tick_dots(4);
 
     dma.tick_dots(2);
     dma.tick_dots(2);
@@ -92,6 +101,7 @@ TEST_CASE("OAM DMA can schedule multiple copies from one tick")
     OamDma dma;
 
     dma.start(0xA0);
+    dma.tick_dots(4);
     dma.tick_dots(12);
 
     REQUIRE(dma.pending_copy_count() == 3);
@@ -104,6 +114,7 @@ TEST_CASE("OAM DMA acknowledge advances source and OAM offset")
     OamDma dma;
 
     dma.start(0xC0);
+    dma.tick_dots(4);
     dma.tick_dots(8);
 
     REQUIRE(dma.pending_copy_count() == 2);
@@ -123,6 +134,7 @@ TEST_CASE("OAM DMA acknowledge without pending copy is a no-op")
     OamDma dma;
 
     dma.start(0xC0);
+    dma.tick_dots(4);
     dma.acknowledge_copy();
 
     REQUIRE(dma.is_active());
@@ -136,7 +148,7 @@ TEST_CASE("OAM DMA stops after 160 acknowledged copies")
     OamDma dma;
 
     dma.start(0xD0);
-    dma.tick_dots(640);
+    dma.tick_dots(644);
 
     REQUIRE(dma.is_active());
     REQUIRE(dma.pending_copy_count() == 160);
@@ -162,7 +174,31 @@ TEST_CASE("OAM DMA does not schedule beyond 160 bytes")
     OamDma dma;
 
     dma.start(0xD0);
-    dma.tick_dots(800);
+    dma.tick_dots(804);
 
     REQUIRE(dma.pending_copy_count() == 160);
+}
+
+TEST_CASE("OAM DMA restart keeps the old transfer alive for the startup M-cycle")
+{
+    OamDma dma;
+
+    dma.start(0xC0);
+    dma.tick_dots(4);
+    dma.tick_dots(4);
+    dma.acknowledge_copy();
+    REQUIRE(dma.source_addr() == 0xC001);
+
+    dma.start(0xD0);
+    REQUIRE(dma.read_reg() == 0xD0);
+    REQUIRE(dma.source_addr() == 0xC001);
+
+    dma.tick_dots(4);
+    REQUIRE(dma.copy_pending());
+    REQUIRE(dma.source_addr() == 0xC001);
+
+    dma.acknowledge_copy();
+    REQUIRE(dma.is_active());
+    REQUIRE(dma.source_addr() == 0xD000);
+    REQUIRE(dma.oam_offset() == 0);
 }

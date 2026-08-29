@@ -360,7 +360,7 @@ TEST_CASE("Timer writing TIMA during overflow delay cancels reload and interrupt
     REQUIRE_FALSE(interrupts.highest_priority_pending().has_value());
 }
 
-TEST_CASE("Timer writing TIMA after overflow reload does not cancel interrupt")
+TEST_CASE("Timer ignores a TIMA write during the reload cycle")
 {
     InterruptController interrupts;
     Timer timer(interrupts);
@@ -375,8 +375,45 @@ TEST_CASE("Timer writing TIMA after overflow reload does not cancel interrupt")
     timer.tick_dots(20);
     timer.write(0xFF05, 0x55);
 
-    REQUIRE(timer.read(0xFF05) == 0x55);
+    REQUIRE(timer.read(0xFF05) == 0xA7);
     REQUIRE(interrupts.highest_priority_pending() == Interrupt::Timer);
+}
+
+TEST_CASE("Timer accepts a TIMA write after the reload cycle")
+{
+    InterruptController interrupts;
+    Timer timer(interrupts);
+
+    interrupts.reset();
+    timer.reset();
+    timer.write(0xFF05, 0xFF);
+    timer.write(0xFF06, 0xA7);
+    timer.write(0xFF07, 0x05);
+
+    timer.tick_dots(20);
+    timer.tick_dots(1);
+    timer.write(0xFF05, 0x55);
+
+    REQUIRE(timer.read(0xFF05) == 0x55);
+    REQUIRE((interrupts.read_if() & 0x04) != 0);
+}
+
+TEST_CASE("Timer writing TMA during reload also updates TIMA")
+{
+    InterruptController interrupts;
+    Timer timer(interrupts);
+
+    interrupts.reset();
+    timer.reset();
+    timer.write(0xFF05, 0xFF);
+    timer.write(0xFF06, 0xA7);
+    timer.write(0xFF07, 0x05);
+
+    timer.tick_dots(20);
+    timer.write(0xFF06, 0x55);
+
+    REQUIRE(timer.read(0xFF06) == 0x55);
+    REQUIRE(timer.read(0xFF05) == 0x55);
 }
 
 TEST_CASE("Timer writing TMA during overflow delay changes the reload value")

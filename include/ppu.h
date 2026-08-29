@@ -119,10 +119,13 @@ private:
     uint8_t oam_scan_index = 0;
     uint8_t window_line = 0;
     uint8_t scx_low = 0;
+    int ly_for_comparison = 0;
     bool window_y_triggered = false;
     bool window_triggered_this_line = false;
-    bool window_glitch_armed = false;
+    bool window_active = false;
+    bool wx_just_changed = false;
     bool insert_bg_pixel = false;
+    bool coincidence_flag = true;
     bool first_frame_blank = true;
     bool startup_line = false;
     bool oam_dma_active = false;
@@ -160,6 +163,7 @@ private:
     void set_mode(Mode next_mode);
     bool stat_interrupt_active(uint8_t interrupt_selects) const;
     void update_stat_interrupt();
+    void set_ly_for_comparison(int value);
     void begin_scanline();
     void scan_oam_entry();
     void begin_mode3();
@@ -168,10 +172,12 @@ private:
     void clear_fifos();
     void push_blank_bg_pixels();
     void push_bg_pixels();
+    bool try_push_bg_pixels();
     void overlay_object_pixels(const ObjectCandidate& object);
     void trigger_window();
     void start_object_fetch();
     bool tick_object_fetch();
     void mix_and_push_pixel();
+    void finish_drawing_if_complete();
     void corrupt_oam(BusAccessType access_type);
 };

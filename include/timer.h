@@ -33,6 +33,7 @@ private:
     uint8_t tac;  // FF07
     bool previous_timer_input = false;
     int overflow_delay = 0;
+    bool reload_cycle = false;
     int div_apu_ticks = 0;
 
     bool timer_enabled() const;

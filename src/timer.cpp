@@ -23,6 +23,7 @@ void Timer::reset() {
     tac = 0;
     previous_timer_input = timer_input();
     overflow_delay = 0;
+    reload_cycle = false;
     div_apu_ticks = 0;
 }
 
@@ -33,12 +34,15 @@ void Timer::tick_dots(int dots)
     }
 
     for (int i = 0; i < dots; i++) {
+        reload_cycle = false;
+
         if (overflow_delay > 0) {
             overflow_delay--;
 
             if (overflow_delay == 0) {
                 tima = tma;
                 interrupts.request(Interrupt::Timer);
+                reload_cycle = true;
             }
         }
 
@@ -86,11 +90,17 @@ void Timer::write(uint16_t addr, uint8_t value)
         break;
     }
     case 0xFF05:
+        if (reload_cycle) {
+            break;
+        }
         tima = value;
         overflow_delay = 0;
         break;
     case 0xFF06:
         tma = value;
+        if (reload_cycle) {
+            tima = value;
+        }
         break;
     case 0xFF07:
         tac = value & 0x07;

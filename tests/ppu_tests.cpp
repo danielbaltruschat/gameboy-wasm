@@ -416,7 +416,7 @@ TEST_CASE("PPU VBlank lasts ten scanlines before the next frame")
     ppu.write(lcdc, 0x80);
     ppu.tick_dots(lcd_enable_line_dots + dots_per_line * 143);
 
-    ppu.tick_dots(dots_per_line * 9 + 3);
+    ppu.tick_dots(dots_per_line * 9 + 5);
     REQUIRE(ppu.read(ly) == 153);
     REQUIRE(current_mode(ppu) == vblank_mode);
 
@@ -425,7 +425,7 @@ TEST_CASE("PPU VBlank lasts ten scanlines before the next frame")
     REQUIRE(ppu.read(ly) == 0);
     REQUIRE(current_mode(ppu) == vblank_mode);
 
-    ppu.tick_dots(452);
+    ppu.tick_dots(450);
 
     REQUIRE(ppu.read(ly) == 0);
     REQUIRE(current_mode(ppu) == oam_scan_mode);
@@ -509,6 +509,10 @@ TEST_CASE("PPU requests a STAT interrupt when LY reaches LYC")
     ppu.tick_dots(1);
 
     REQUIRE(ppu.read(ly) == 1);
+    REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
+
+    ppu.tick_dots(4);
+
     REQUIRE((interrupts.read_if() & stat_interrupt) != 0);
 }
 
@@ -618,7 +622,7 @@ TEST_CASE("PPU exposes the transient DMG STAT write value for one M-cycle")
     REQUIRE((ppu.read(stat) & 0x78) == 0x00);
 }
 
-TEST_CASE("PPU updates LY and coincidence four dots into line 153")
+TEST_CASE("PPU applies the DMG LY and coincidence phases on line 153")
 {
     InterruptController interrupts;
     PPU ppu(interrupts);
@@ -630,7 +634,7 @@ TEST_CASE("PPU updates LY and coincidence four dots into line 153")
     ppu.write(lcdc, 0x80);
     interrupts.write_if(0x00);
 
-    ppu.tick_dots(lcd_enable_line_dots + dots_per_line * 152 + 3);
+    ppu.tick_dots(lcd_enable_line_dots + dots_per_line * 152 + 5);
     REQUIRE(ppu.read(ly) == 153);
     REQUIRE((ppu.read(stat) & 0x04) == 0);
     REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
@@ -638,6 +642,10 @@ TEST_CASE("PPU updates LY and coincidence four dots into line 153")
     ppu.tick_dots(1);
 
     REQUIRE(ppu.read(ly) == 0);
+    REQUIRE((ppu.read(stat) & 0x04) == 0);
+
+    ppu.tick_dots(6);
+
     REQUIRE((ppu.read(stat) & 0x04) != 0);
     REQUIRE((interrupts.read_if() & stat_interrupt) != 0);
 }
@@ -757,6 +765,72 @@ TEST_CASE("PPU renders the complete scanline when the window starts off screen")
         ppu.get_framebuffer().pixels()[Framebuffer::width - 1] !=
         0xFFFFFFFF
     );
+}
+
+TEST_CASE("PPU WX 166 advances the DMG window without drawing its normal pixels")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    write_solid_tile(ppu, 0, 0);
+    ppu.write(0x8010, 0xFF);
+    ppu.write(0x8011, 0x00);
+    ppu.write(0x8012, 0x00);
+    ppu.write(0x8013, 0xFF);
+    ppu.write(0x8014, 0xFF);
+    ppu.write(0x8015, 0xFF);
+    ppu.write(bg_tile_map, 0x00);
+    ppu.write(window_tile_map, 0x01);
+    ppu.write(wy, 0);
+    ppu.write(wx, 166);
+    ppu.write(bgp, 0xE4);
+    ppu.write(lcdc, 0xF1);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(dots_per_line);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[Framebuffer::width - 1] == 0xFFFFFFFF);
+
+    ppu.write(wx, 7);
+    ppu.tick_dots(dots_per_line);
+
+    REQUIRE(pixels[Framebuffer::width] == 0x000000FF);
+}
+
+TEST_CASE("PPU can restart the DMG window on a later X position in the same line")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    write_solid_tile(ppu, 0, 0);
+    ppu.write(0x8010, 0xFF);
+    ppu.write(0x8011, 0x00);
+    ppu.write(0x8012, 0x00);
+    ppu.write(0x8013, 0xFF);
+    ppu.write(bg_tile_map, 0x00);
+    ppu.write(window_tile_map, 0x01);
+    ppu.write(wy, 0);
+    ppu.write(wx, 7);
+    ppu.write(bgp, 0xE4);
+    ppu.write(lcdc, 0xF1);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(112);
+    ppu.write(lcdc, 0xD1);
+    ppu.tick_dots(8);
+    ppu.write(wx, 80);
+    ppu.write(lcdc, 0xF1);
+    ppu.tick_dots(dots_per_line - 120);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[0] == 0xAAAAAAFF);
+    REQUIRE(pixels[72] == 0xFFFFFFFF);
+    REQUIRE(pixels[73] == 0x555555FF);
 }
 
 TEST_CASE("PPU renders an object at its OAM position")

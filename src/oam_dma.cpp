@@ -4,10 +4,14 @@
 
 void OamDma::reset() {
     active = false;
+    start_pending = false;
+    restart_ready = false;
     dma_reg = 0x00;
     source_base = 0x0000;
+    pending_source_base = 0x0000;
     index = 0;
     dot_counter = 0;
+    start_dots_remaining = 0;
     pending_copies = 0;
 }
 
@@ -28,12 +32,17 @@ bool OamDma::blocks_cpu_access(uint16_t addr) const {
 }
 
 void OamDma::start(uint8_t source_high_byte) {
-    active = true;
     dma_reg = source_high_byte;
-    source_base = static_cast<uint16_t>(source_high_byte) << 8;
-    index = 0;
-    dot_counter = 0;
-    pending_copies = 0;
+    pending_source_base = static_cast<uint16_t>(source_high_byte) << 8;
+    start_pending = true;
+    restart_ready = false;
+    start_dots_remaining = 4;
+
+    if (!active) {
+        index = 0;
+        dot_counter = 0;
+        pending_copies = 0;
+    }
 }
 
 void OamDma::acknowledge_copy() {
@@ -44,6 +53,11 @@ void OamDma::acknowledge_copy() {
     pending_copies--;
     index++;
 
+    if (restart_ready && pending_copies == 0) {
+        begin_pending_transfer();
+        return;
+    }
+
     if (index >= 160) {
         active = false;
         pending_copies = 0;
@@ -52,12 +66,38 @@ void OamDma::acknowledge_copy() {
 }
 
 void OamDma::tick_dots(int dots) {
-    if (!active || dots <= 0) return;
+    if (dots <= 0) return;
 
-    dot_counter += dots;
+    for (int dot = 0; dot < dots; ++dot) {
+        if (active) {
+            dot_counter++;
+            if (dot_counter == 4 && (index + pending_copies) < 160) {
+                dot_counter = 0;
+                pending_copies++;
+            }
+        }
 
-    while (dot_counter >= 4 && (index + pending_copies) < 160) { // OAM DMA copies 1 byte per M cycle (so 4 dot cycle)
-        dot_counter -= 4;
-        pending_copies++;
+        if (!start_pending || restart_ready) {
+            continue;
+        }
+
+        start_dots_remaining--;
+        if (start_dots_remaining == 0) {
+            if (active && pending_copies > 0) {
+                restart_ready = true;
+            } else {
+                begin_pending_transfer();
+            }
+        }
     }
+}
+
+void OamDma::begin_pending_transfer() {
+    active = true;
+    start_pending = false;
+    restart_ready = false;
+    source_base = pending_source_base;
+    index = 0;
+    dot_counter = 0;
+    pending_copies = 0;
 }

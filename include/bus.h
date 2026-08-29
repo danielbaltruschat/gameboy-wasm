@@ -47,7 +47,9 @@ public:
     {}
 
     uint8_t read(uint16_t addr);
+    uint8_t read_and_internal(uint16_t addr);
     void write(uint16_t addr, uint8_t value);
+    void internal_cycle(uint16_t addr);
 
     void tick_dma_dots(int dots);
     bool dma_active() const;
@@ -67,8 +69,10 @@ private:
     Memory& memory;
     OamDma oam_dma;
     uint8_t open_bus_value = 0xFF;
+    uint8_t dma_bus_value = 0xFF;
 
     uint8_t read_unchecked(uint16_t addr);
     void write_unchecked(uint16_t addr, uint8_t value);
     void update_open_bus(uint8_t value);
+    uint8_t read_blocked_by_dma() const;
 };

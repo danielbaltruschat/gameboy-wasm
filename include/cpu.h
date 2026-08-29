@@ -53,6 +53,8 @@ public:
     uint8_t current_opcode;
     uint8_t current_cb_opcode;
     uint8_t instruction_m_cycle;
+    uint8_t operand8;
+    uint16_t operand16;
 
     //FDE cycle
     uint8_t fetch8();
@@ -65,7 +67,9 @@ public:
 
     //memory helpers
     uint8_t read8(uint16_t addr);
+    uint8_t read8_and_internal(uint16_t addr);
     void write8(uint16_t addr, uint8_t value);
+    void internal_cycle(uint16_t addr);
     uint16_t read16(uint16_t addr);
     void write16(uint16_t addr, uint16_t value);
 
@@ -123,4 +127,6 @@ public:
     void bit(int bit, uint8_t value);
     uint8_t set_bit(int bit, uint8_t value);
     uint8_t reset_bit(int bit, uint8_t value);
+
+    void finish_instruction();
 };

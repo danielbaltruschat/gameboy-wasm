@@ -68,10 +68,13 @@ void PPU::reset() {
     oam_scan_index = 0;
     window_line = 0;
     scx_low = 0;
+    ly_for_comparison = 0;
     window_y_triggered = false;
     window_triggered_this_line = false;
-    window_glitch_armed = false;
+    window_active = false;
+    wx_just_changed = false;
     insert_bg_pixel = false;
+    coincidence_flag = true;
     first_frame_blank = true;
     startup_line = false;
     oam_dma_active = false;
@@ -121,6 +124,19 @@ void PPU::tick_dot() {
     update_stat_write();
     dot_counter++;
 
+    if (scanline == 153) {
+        if (dot_counter == 6) {
+            ly = 0;
+            set_ly_for_comparison(153);
+        } else if (dot_counter == 8) {
+            set_ly_for_comparison(-1);
+        } else if (dot_counter == 12) {
+            set_ly_for_comparison(0);
+        }
+    } else if (dot_counter == 4 && ly_for_comparison < 0) {
+        set_ly_for_comparison(scanline);
+    }
+
     if (startup_line && mode == Mode::HBlank) {
         if (dot_counter == 77) {
             oam_write_blocked = true;
@@ -143,11 +159,6 @@ void PPU::tick_dot() {
         tick_mode3();
     }
 
-    if (scanline == 153 && dot_counter == 4) {
-        ly = 0;
-        update_stat_interrupt();
-    }
-
     if (dot_counter < line_dot_limit) {
         return;
     }
@@ -157,6 +168,7 @@ void PPU::tick_dot() {
     startup_line = false;
     scanline = static_cast<uint8_t>((scanline + 1) % 154);
     ly = scanline;
+    set_ly_for_comparison(-1);
 
     if (scanline == 0) {
         window_line = 0;
@@ -213,9 +225,9 @@ bool PPU::window_enabled() const {
 
 uint8_t PPU::stat_value() const {
     const uint8_t mode_bits = lcd_enabled() ? static_cast<uint8_t>(mode) : 0;
-    const uint8_t coincidence_flag = ly == lyc ? 0x04 : 0;
+    const uint8_t coincidence_bit = coincidence_flag ? 0x04 : 0;
 
-    return 0x80 | (stat & 0x78) | coincidence_flag | mode_bits;
+    return 0x80 | (stat & 0x78) | coincidence_bit | mode_bits;
 }
 
 uint8_t PPU::read(uint16_t addr) const {
@@ -273,13 +285,15 @@ void PPU::write(uint16_t addr, uint8_t value) {
                 scx_low = 0;
                 window_y_triggered = false;
                 window_triggered_this_line = false;
-                window_glitch_armed = false;
+                window_active = false;
+                wx_just_changed = false;
                 insert_bg_pixel = false;
                 first_frame_blank = true;
                 startup_line = false;
                 stat = pending_stat;
                 stat_write_dots_remaining = 0;
                 framebuffer = Framebuffer{};
+                set_ly_for_comparison(0);
                 set_mode(Mode::HBlank);
                 set_access_blocking(false, false);
                 clear_fifos();
@@ -292,11 +306,13 @@ void PPU::write(uint16_t addr, uint8_t value) {
                 scx_low = 0;
                 window_y_triggered = false;
                 window_triggered_this_line = false;
-                window_glitch_armed = false;
+                window_active = false;
+                wx_just_changed = false;
                 insert_bg_pixel = false;
                 first_frame_blank = true;
                 startup_line = true;
                 framebuffer = Framebuffer{};
+                set_ly_for_comparison(0);
                 set_mode(Mode::HBlank);
                 set_access_blocking(false, false);
             }
@@ -324,7 +340,7 @@ void PPU::write(uint16_t addr, uint8_t value) {
             break;
         case 0xFF45:
             lyc = value;
-            update_stat_interrupt();
+            set_ly_for_comparison(ly_for_comparison);
             break;
         case 0xFF47:
             bgp = value;
@@ -339,10 +355,8 @@ void PPU::write(uint16_t addr, uint8_t value) {
             wy = value;
             break;
         case 0xFF4B:
-            if (window_triggered_this_line && wx != value) {
-                window_glitch_armed = true;
-            }
             wx = value;
+            wx_just_changed = true;
             break;
         default:
             break;
@@ -377,7 +391,7 @@ bool PPU::stat_interrupt_active(uint8_t interrupt_selects) const {
     return
         lcd_enabled() &&
         (
-            ((interrupt_selects & 0x40) != 0 && ly == lyc) ||
+            ((interrupt_selects & 0x40) != 0 && coincidence_flag) ||
             ((interrupt_selects & 0x20) != 0 && mode == Mode::OamScan) ||
             ((interrupt_selects & 0x10) != 0 && mode == Mode::VBlank) ||
             (
@@ -386,6 +400,12 @@ bool PPU::stat_interrupt_active(uint8_t interrupt_selects) const {
                 !startup_hblank
             )
         );
+}
+
+void PPU::set_ly_for_comparison(int value) {
+    ly_for_comparison = value;
+    coincidence_flag = value >= 0 && value == lyc;
+    update_stat_interrupt();
 }
 
 void PPU::update_stat_interrupt() {
@@ -445,7 +465,8 @@ void PPU::begin_scanline() {
         window_y_triggered = true;
     }
     window_triggered_this_line = false;
-    window_glitch_armed = false;
+    window_active = false;
+    wx_just_changed = false;
     insert_bg_pixel = false;
     fetcher = {};
     clear_fifos();
@@ -502,19 +523,49 @@ void PPU::tick_mode3() {
         return;
     }
 
-    if (!window_triggered_this_line && window_enabled()) {
-        const int window_left = static_cast<int>(wx) - 7;
-        if (pixel_position >= window_left) {
-            trigger_window();
+    if (!window_active && window_enabled()) {
+        bool should_trigger = false;
+        bool rewind_screen_x = false;
+
+        if (wx == 0) {
+            should_trigger =
+                pixel_position == -7 ||
+                (pixel_position == -16 && scx_low != 0) ||
+                (pixel_position >= -15 && pixel_position <= -8);
+        } else if (wx < 166) {
+            should_trigger = wx == static_cast<uint8_t>(pixel_position + 7);
+            rewind_screen_x =
+                !should_trigger &&
+                !wx_just_changed &&
+                wx == static_cast<uint8_t>(pixel_position + 6) &&
+                screen_x > 0;
+            should_trigger = should_trigger || rewind_screen_x;
         }
-    } else if (
-        window_glitch_armed &&
-        window_triggered_this_line &&
-        pixel_position + 7 == wx
-    ) {
-        insert_bg_pixel = true;
-        window_glitch_armed = false;
+
+        if (should_trigger) {
+            if (rewind_screen_x) {
+                screen_x--;
+            }
+            trigger_window();
+            if (wx == 0 && scx_low != 0) {
+                wx_just_changed = false;
+                return;
+            }
+        }
     }
+
+    if (
+        !window_triggered_this_line &&
+        window_y_triggered &&
+        (lcdc & 0x21) == 0x21 &&
+        wx == 166 &&
+        pixel_position == 159
+    ) {
+        window_triggered_this_line = true;
+        window_line++;
+    }
+
+    wx_just_changed = false;
 
     if (tick_object_fetch()) {
         return;
@@ -528,13 +579,7 @@ void PPU::tick_mode3() {
     mix_and_push_pixel();
     advance_pixel_fetcher();
 
-    if (screen_x == Framebuffer::width) {
-        if (window_triggered_this_line) {
-            window_line++;
-        }
-        set_mode(Mode::HBlank);
-        set_access_blocking(false, false);
-    }
+    finish_drawing_if_complete();
 }
 
 void PPU::advance_pixel_fetcher() {
@@ -544,6 +589,7 @@ void PPU::advance_pixel_fetcher() {
     case 0: {
         if (fetcher.fetching_window && !window_enabled()) {
             fetcher.fetching_window = false;
+            window_active = false;
         }
 
         const uint16_t map_base = fetcher.fetching_window
@@ -607,16 +653,10 @@ void PPU::advance_pixel_fetcher() {
             fetcher.x = static_cast<uint8_t>((fetcher.x + 1) & 0x1F);
         }
         fetcher.step = 6;
-        if (bg_fifo.size == 0) {
-            push_bg_pixels();
-            fetcher.step = 0;
-        }
+        try_push_bg_pixels();
         break;
     case 6:
-        if (bg_fifo.size <= 8) {
-            push_bg_pixels();
-            fetcher.step = 0;
-        }
+        try_push_bg_pixels();
         break;
     default:
         assert(false);
@@ -625,7 +665,7 @@ void PPU::advance_pixel_fetcher() {
 }
 
 void PPU::push_bg_pixels() {
-    assert(bg_fifo.size <= 8);
+    assert(bg_fifo.size == 0);
 
     for (uint8_t pixel = 0; pixel < 8; ++pixel) {
         const uint8_t bit = 7 - pixel;
@@ -637,6 +677,28 @@ void PPU::push_bg_pixels() {
         bg_fifo.pixels[tail] = FifoPixel{color};
         bg_fifo.size++;
     }
+}
+
+bool PPU::try_push_bg_pixels() {
+    if (bg_fifo.size != 0) {
+        return false;
+    }
+
+    if (window_y_triggered && (lcdc & 0x20) == 0) {
+        int logical_position = pixel_position + 7;
+        if (logical_position < 0 || logical_position > 167) {
+            logical_position = 0;
+        }
+        if (wx == logical_position) {
+            bg_fifo.pixels[bg_fifo.head] = {};
+            bg_fifo.size = 1;
+            return false;
+        }
+    }
+
+    push_bg_pixels();
+    fetcher.step = 0;
+    return true;
 }
 
 void PPU::push_blank_bg_pixels() {
@@ -703,8 +765,11 @@ void PPU::overlay_object_pixels(const ObjectCandidate& object) {
 }
 
 void PPU::trigger_window() {
+    if (window_triggered_this_line) {
+        window_line++;
+    }
     window_triggered_this_line = true;
-    window_glitch_armed = false;
+    window_active = true;
     bg_fifo = {};
     fetcher = {};
     fetcher.fetching_window = true;
@@ -802,7 +867,10 @@ bool PPU::tick_object_fetch() {
     if ((lcdc & 0x02) == 0) {
         object_fetch_step = ObjectFetchStep::None;
         object_fetch_index = -1;
-        return false;
+        mix_and_push_pixel();
+        advance_pixel_fetcher();
+        finish_drawing_if_complete();
+        return true;
     }
 
     assert(object_fetch_index >= 0);
@@ -865,6 +933,18 @@ bool PPU::tick_object_fetch() {
     }
 
     return true;
+}
+
+void PPU::finish_drawing_if_complete() {
+    if (screen_x != Framebuffer::width || mode != Mode::Drawing) {
+        return;
+    }
+
+    if (window_triggered_this_line) {
+        window_line++;
+    }
+    set_mode(Mode::HBlank);
+    set_access_blocking(false, false);
 }
 
 void PPU::mix_and_push_pixel() {
