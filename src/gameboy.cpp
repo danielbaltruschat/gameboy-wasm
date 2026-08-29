@@ -1,0 +1,96 @@
+#include "gameboy.h"
+
+#include "dmg_clock.h"
+
+GameBoy::GameBoy()
+    : ppu(interrupts),
+      timer(interrupts),
+      joypad(interrupts),
+      bus(boot_rom, cartridge, ppu, timer, joypad, interrupts, memory),
+      cpu(&bus, false)
+{
+    reset();
+}
+
+void GameBoy::load_boot_rom(std::span<const uint8_t> rom)
+{
+    boot_rom.load_dmg(rom);
+}
+
+void GameBoy::load_rom(std::span<const uint8_t> rom)
+{
+    cartridge.load_rom(rom);
+    rtc_dots = 0;
+}
+
+void GameBoy::reset()
+{
+    interrupts.reset();
+    boot_rom.reset();
+    memory.reset();
+    cartridge.reset_mapper();
+    ppu.reset();
+    timer.reset();
+    joypad.reset();
+    bus.reset();
+    cpu.reset();
+    total_dots = 0;
+}
+
+void GameBoy::step_m_cycle()
+{
+    cpu.step_m_cycle();
+
+    for (int dot = 0; dot < dmg::dots_per_m_cycle; ++dot) {
+        timer.tick_dots(1);
+        ppu.tick_dots(1);
+        bus.tick_dma_dots(1);
+        joypad.tick_dots(1);
+
+        ++total_dots;
+        ++rtc_dots;
+        if (rtc_dots == dmg::dot_clock_hz) {
+            rtc_dots = 0;
+            cartridge.tick_rtc_seconds(1);
+        }
+    }
+}
+
+int GameBoy::step_instruction()
+{
+    int m_cycles = 0;
+    do {
+        step_m_cycle();
+        ++m_cycles;
+    } while (!cpu.instruction_boundary());
+
+    return m_cycles;
+}
+
+void GameBoy::step_frame()
+{
+    ppu.clear_frame_ready();
+    do {
+        step_m_cycle();
+    } while (!ppu.is_frame_ready());
+}
+
+void GameBoy::set_button(JoypadButton button, bool pressed)
+{
+    joypad.set_button(button, pressed);
+}
+
+const Framebuffer& GameBoy::framebuffer() const
+{
+    return ppu.get_framebuffer();
+}
+
+bool GameBoy::frame_ready() const
+{
+    return ppu.is_frame_ready();
+}
+
+void GameBoy::clear_frame_ready()
+{
+    ppu.clear_frame_ready();
+}

@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <span>
 
-#include "apu.h"
 #include "boot_rom.h"
 #include "bus.h"
 #include "cartridge.h"
@@ -12,7 +11,6 @@
 #include "keypad.h"
 #include "memory.h"
 #include "ppu.h"
-#include "serial.h"
 #include "timer.h"
 
 
@@ -31,7 +29,6 @@ public:
     void set_button(JoypadButton button, bool pressed);
 
     const Framebuffer& framebuffer() const;
-    std::span<const Sample> take_audio_samples();
 
     bool frame_ready() const;
     void clear_frame_ready();
@@ -45,17 +42,13 @@ private:
 
     // Hardware with direct interrupt access
     PPU ppu;
-    APU apu;
 
     // Components that depend on shared hardware
     Timer timer;
     Joypad joypad;
-    Serial serial;       // optional initially
     MemBus bus;
     CPU cpu;
 
-    // Emulator state
-    bool running;
-    bool paused;
-    uint64_t total_dots;
+    uint64_t total_dots = 0;
+    uint32_t rtc_dots = 0;
 };

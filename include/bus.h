@@ -5,13 +5,11 @@
 #include "boot_rom.h"
 #include "oam_dma.h"
 
-class APU;
 class Cartridge;
 class InterruptController;
 class Joypad;
 class Memory;
 class PPU;
-class Serial;
 class Timer;
 
 enum class BusAccessType {
@@ -28,20 +26,16 @@ public:
         BootRom& boot_rom,
         Cartridge& cartridge,
         PPU& ppu,
-        APU& apu,
         Timer& timer,
         Joypad& joypad,
-        Serial& serial,
         InterruptController& interrupts,
         Memory& memory
     )
         : boot_rom(boot_rom),
           cartridge(cartridge),
           ppu(ppu),
-          apu(apu),
           timer(timer),
           joypad(joypad),
-          serial(serial),
           interrupts(interrupts),
           memory(memory)
     {}
@@ -63,10 +57,8 @@ private:
     BootRom& boot_rom;
     Cartridge& cartridge;
     PPU& ppu;
-    APU& apu;
     Timer& timer;
     Joypad& joypad;
-    Serial& serial;
     InterruptController& interrupts;
     Memory& memory;
     OamDma oam_dma;

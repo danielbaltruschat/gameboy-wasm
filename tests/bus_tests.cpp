@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "apu.h"
 #include "boot_rom.h"
 #include "bus.h"
 #include "cartridge.h"
@@ -12,10 +11,7 @@
 #include "keypad.h"
 #include "memory.h"
 #include "ppu.h"
-#include "serial.h"
 #include "timer.h"
-
-Serial::Serial(InterruptController& interrupts) : interrupts(interrupts) {}
 
 namespace {
 
@@ -34,18 +30,14 @@ struct BusFixture {
     std::vector<uint8_t> rom = make_rom();
     Cartridge cartridge{rom};
     PPU ppu{interrupts};
-    APU apu;
     Timer timer{interrupts};
     Joypad joypad{interrupts};
-    Serial serial{interrupts};
     MemBus bus{
         boot_rom,
         cartridge,
         ppu,
-        apu,
         timer,
         joypad,
-        serial,
         interrupts,
         memory,
     };

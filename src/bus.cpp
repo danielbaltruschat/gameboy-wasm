@@ -1,11 +1,9 @@
 #include "bus.h"
-#include "apu.h"
 #include "cartridge.h"
 #include "interrupt_controller.h"
 #include "keypad.h"
 #include "memory.h"
 #include "ppu.h"
-#include "serial.h"
 #include "timer.h"
 
 void MemBus::reset() {

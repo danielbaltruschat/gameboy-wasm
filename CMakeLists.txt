@@ -49,6 +49,7 @@ if(BUILD_TESTING)
         "tests/bus_tests.cpp"
         "tests/cartridge_tests.cpp"
         "tests/cputests.cpp"
+        "tests/gameboy_tests.cpp"
         "tests/interrupt_controller_tests.cpp"
         "tests/joypad_tests.cpp"
         "tests/memory_tests.cpp"
