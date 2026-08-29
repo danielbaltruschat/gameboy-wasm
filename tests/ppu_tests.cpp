@@ -54,6 +54,25 @@ void clear_oam(PPU& ppu)
     }
 }
 
+void write_oam_word(PPU& ppu, uint16_t offset, uint16_t value)
+{
+    ppu.write(oam_start + offset, value & 0xFF);
+    ppu.write(oam_start + offset + 1, value >> 8);
+}
+
+uint16_t read_oam_word(const PPU& ppu, uint16_t offset)
+{
+    return static_cast<uint16_t>(
+        ppu.read(oam_start + offset) |
+        static_cast<uint16_t>(ppu.read(oam_start + offset + 1)) << 8
+    );
+}
+
+void tick_to_second_frame(PPU& ppu)
+{
+    ppu.tick_dots(456 * 154);
+}
+
 } // namespace
 
 TEST_CASE("Framebuffer stores pixels in row-major order")
@@ -335,11 +354,16 @@ TEST_CASE("PPU VBlank lasts ten scanlines before the next frame")
     ppu.write(lcdc, 0x80);
     ppu.tick_dots(456 * 144);
 
-    ppu.tick_dots(456 * 9 + 455);
+    ppu.tick_dots(456 * 9 + 3);
     REQUIRE(ppu.read(ly) == 153);
     REQUIRE(current_mode(ppu) == vblank_mode);
 
     ppu.tick_dots(1);
+
+    REQUIRE(ppu.read(ly) == 0);
+    REQUIRE(current_mode(ppu) == vblank_mode);
+
+    ppu.tick_dots(452);
 
     REQUIRE(ppu.read(ly) == 0);
     REQUIRE(current_mode(ppu) == oam_scan_mode);
@@ -484,6 +508,54 @@ TEST_CASE("PPU requests VBlank and enabled mode 1 STAT interrupts together")
     REQUIRE((interrupts.read_if() & stat_interrupt) != 0);
 }
 
+TEST_CASE("PPU applies the DMG STAT write interrupt glitch outside mode 3")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    ppu.write(lyc, 1);
+    ppu.write(lcdc, 0x80);
+    interrupts.write_if(0x00);
+
+    ppu.write(stat, 0x00);
+
+    REQUIRE((interrupts.read_if() & stat_interrupt) != 0);
+
+    interrupts.write_if(0x00);
+    ppu.tick_dots(80);
+    REQUIRE(current_mode(ppu) == drawing_mode);
+
+    ppu.write(stat, 0x00);
+
+    REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
+}
+
+TEST_CASE("PPU updates LY and coincidence four dots into line 153")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    ppu.write(lyc, 0);
+    ppu.write(stat, 0x40);
+    ppu.write(lcdc, 0x80);
+    interrupts.write_if(0x00);
+
+    ppu.tick_dots(456 * 153 + 3);
+    REQUIRE(ppu.read(ly) == 153);
+    REQUIRE((ppu.read(stat) & 0x04) == 0);
+    REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
+
+    ppu.tick_dots(1);
+
+    REQUIRE(ppu.read(ly) == 0);
+    REQUIRE((ppu.read(stat) & 0x04) != 0);
+    REQUIRE((interrupts.read_if() & stat_interrupt) != 0);
+}
+
 TEST_CASE("PPU renders background tile bitplanes from most-significant bit first")
 {
     InterruptController interrupts;
@@ -497,11 +569,31 @@ TEST_CASE("PPU renders background tile bitplanes from most-significant bit first
     ppu.write(bgp, 0xE4);
     ppu.write(lcdc, 0x91);
 
+    tick_to_second_frame(ppu);
     ppu.tick_dots(456);
 
     const uint32_t* pixels = ppu.get_framebuffer().pixels();
     REQUIRE(pixels[0] != pixels[1]);
     REQUIRE(pixels[1] == pixels[7]);
+}
+
+TEST_CASE("PPU keeps the first frame after LCD enable blank")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    write_solid_tile(ppu, 0, 1);
+    ppu.write(bg_tile_map, 0x00);
+    ppu.write(bgp, 0xE4);
+    ppu.write(lcdc, 0x91);
+
+    ppu.tick_dots(456 * 144);
+    REQUIRE(ppu.get_framebuffer().pixels()[0] == 0xFFFFFFFF);
+
+    ppu.tick_dots(456 * 11);
+    REQUIRE(ppu.get_framebuffer().pixels()[0] != 0xFFFFFFFF);
 }
 
 TEST_CASE("PPU applies SCX when selecting background tiles")
@@ -520,6 +612,7 @@ TEST_CASE("PPU applies SCX when selecting background tiles")
     ppu.write(bgp, 0xE4);
     ppu.write(lcdc, 0x91);
 
+    tick_to_second_frame(ppu);
     ppu.tick_dots(456);
 
     const uint32_t* pixels = ppu.get_framebuffer().pixels();
@@ -545,12 +638,39 @@ TEST_CASE("PPU starts the window at WX minus seven")
     ppu.write(bgp, 0xE4);
     ppu.write(lcdc, 0xF1);
 
+    tick_to_second_frame(ppu);
     ppu.tick_dots(456);
 
     const uint32_t* pixels = ppu.get_framebuffer().pixels();
     REQUIRE(pixels[0] == pixels[7]);
     REQUIRE(pixels[7] != pixels[8]);
     REQUIRE(pixels[8] == pixels[15]);
+}
+
+TEST_CASE("PPU renders the complete scanline when the window starts off screen")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    write_solid_tile(ppu, 0, 0);
+    write_solid_tile(ppu, 1, 1);
+    for (uint16_t tile = 0; tile < 32; ++tile) {
+        ppu.write(window_tile_map + tile, 1);
+    }
+    ppu.write(wy, 0);
+    ppu.write(wx, 1);
+    ppu.write(bgp, 0xE4);
+    ppu.write(lcdc, 0xF1);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(456);
+
+    REQUIRE(
+        ppu.get_framebuffer().pixels()[Framebuffer::width - 1] !=
+        0xFFFFFFFF
+    );
 }
 
 TEST_CASE("PPU renders an object at its OAM position")
@@ -572,11 +692,38 @@ TEST_CASE("PPU renders an object at its OAM position")
     ppu.write(obp0, 0xE4);
     ppu.write(lcdc, 0x93);
 
+    tick_to_second_frame(ppu);
     ppu.tick_dots(456);
 
     const uint32_t* pixels = ppu.get_framebuffer().pixels();
     REQUIRE(pixels[0] == pixels[7]);
     REQUIRE(pixels[7] != pixels[8]);
+}
+
+TEST_CASE("PPU object attribute fetches lose OAM access during DMA")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    clear_oam(ppu);
+    write_solid_tile(ppu, 1, 1);
+    ppu.write(oam_start, 16);
+    ppu.write(oam_start + 1, 8);
+    ppu.write(oam_start + 2, 1);
+    ppu.write(bgp, 0xE4);
+    ppu.write(obp0, 0xE4);
+    ppu.write(lcdc, 0x93);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(79);
+    ppu.set_oam_dma_active(true);
+    ppu.tick_dots(377);
+    ppu.set_oam_dma_active(false);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[0] == pixels[8]);
 }
 
 TEST_CASE("PPU hides a low-priority object behind a nonzero background pixel")
@@ -599,8 +746,399 @@ TEST_CASE("PPU hides a low-priority object behind a nonzero background pixel")
     ppu.write(obp0, 0xE4);
     ppu.write(lcdc, 0x93);
 
+    tick_to_second_frame(ppu);
     ppu.tick_dots(456);
 
     const uint32_t* pixels = ppu.get_framebuffer().pixels();
     REQUIRE(pixels[0] == pixels[8]);
+}
+
+TEST_CASE("PPU uses signed background tile addressing when LCDC bit 4 is clear")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    write_solid_tile(ppu, 0xFF, 1);
+    ppu.write(bg_tile_map, 0xFF);
+    ppu.write(bg_tile_map + 1, 0x00);
+    ppu.write(bgp, 0xE4);
+    ppu.write(lcdc, 0x81);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(456);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[0] == pixels[7]);
+    REQUIRE(pixels[7] != pixels[8]);
+}
+
+TEST_CASE("PPU applies SCY when selecting a background tile row")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    write_solid_tile(ppu, 0, 0);
+    write_solid_tile(ppu, 1, 2);
+    ppu.write(bg_tile_map + 32, 0x01);
+    ppu.write(bg_tile_map + 33, 0x00);
+    ppu.write(scy, 8);
+    ppu.write(bgp, 0xE4);
+    ppu.write(lcdc, 0x91);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(456);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[0] == pixels[7]);
+    REQUIRE(pixels[7] != pixels[8]);
+}
+
+TEST_CASE("PPU outputs background color zero when the DMG background is disabled")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    ppu.write(bg_tile_map, 0x00);
+    ppu.write(0x8000, 0x80);
+    ppu.write(0x8001, 0x80);
+    ppu.write(bgp, 0xE4);
+    ppu.write(lcdc, 0x90);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(456);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[0] == pixels[1]);
+}
+
+TEST_CASE("PPU advances the window line only after drawing the window")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    ppu.write(0x8010, 0xFF);
+    ppu.write(0x8011, 0x00);
+    ppu.write(0x8012, 0x00);
+    ppu.write(0x8013, 0xFF);
+    ppu.write(window_tile_map, 0x01);
+    ppu.write(window_tile_map + 32, 0x01);
+    ppu.write(wy, 0);
+    ppu.write(wx, 7);
+    ppu.write(bgp, 0xE4);
+    ppu.write(lcdc, 0xF1);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(456 * 2);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[0] != pixels[Framebuffer::width]);
+}
+
+TEST_CASE("PPU applies object X flipping")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    clear_oam(ppu);
+    ppu.write(0x8010, 0x80);
+    ppu.write(0x8011, 0x00);
+    ppu.write(oam_start, 16);
+    ppu.write(oam_start + 1, 8);
+    ppu.write(oam_start + 2, 1);
+    ppu.write(oam_start + 3, 0x20);
+    ppu.write(bgp, 0xE4);
+    ppu.write(obp0, 0xE4);
+    ppu.write(lcdc, 0x93);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(456);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[0] == pixels[8]);
+    REQUIRE(pixels[7] != pixels[8]);
+}
+
+TEST_CASE("PPU uses the second tile for the lower half of an 8 by 16 object")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    clear_oam(ppu);
+    write_solid_tile(ppu, 0, 0);
+    write_solid_tile(ppu, 1, 2);
+    ppu.write(oam_start, 16);
+    ppu.write(oam_start + 1, 8);
+    ppu.write(oam_start + 2, 1);
+    ppu.write(oam_start + 3, 0);
+    ppu.write(bgp, 0xE4);
+    ppu.write(obp0, 0xE4);
+    ppu.write(lcdc, 0x97);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(456 * 9);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[0] != pixels[8 * Framebuffer::width]);
+}
+
+TEST_CASE("PPU limits object selection to the first ten Y-matching OAM entries")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    clear_oam(ppu);
+    write_solid_tile(ppu, 1, 1);
+
+    for (uint16_t index = 0; index < 10; ++index) {
+        ppu.write(oam_start + index * 4, 16);
+        ppu.write(oam_start + index * 4 + 1, 0);
+    }
+
+    ppu.write(oam_start + 40, 16);
+    ppu.write(oam_start + 41, 8);
+    ppu.write(oam_start + 42, 1);
+    ppu.write(bgp, 0xE4);
+    ppu.write(obp0, 0xE4);
+    ppu.write(lcdc, 0x93);
+
+    tick_to_second_frame(ppu);
+    ppu.tick_dots(456);
+
+    const uint32_t* pixels = ppu.get_framebuffer().pixels();
+    REQUIRE(pixels[0] == pixels[8]);
+}
+
+TEST_CASE("PPU fine scrolling extends mode 3")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    ppu.write(scx, 7);
+    ppu.write(lcdc, 0x80);
+
+    ppu.tick_dots(258);
+    REQUIRE(current_mode(ppu) == drawing_mode);
+
+    ppu.tick_dots(1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+}
+
+TEST_CASE("PPU latches the WY condition only at the start of mode 2")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    ppu.write(wy, 1);
+    ppu.write(wx, 7);
+    ppu.write(lcdc, 0xF1);
+
+    ppu.write(wy, 0);
+    ppu.tick_dots(251);
+    REQUIRE(current_mode(ppu) == drawing_mode);
+
+    ppu.tick_dots(1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+}
+
+TEST_CASE("PPU window startup extends mode 3 by six dots")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    ppu.write(wy, 0);
+    ppu.write(wx, 7);
+    ppu.write(lcdc, 0xF1);
+
+    ppu.tick_dots(257);
+    REQUIRE(current_mode(ppu) == drawing_mode);
+
+    ppu.tick_dots(1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+}
+
+TEST_CASE("PPU object fetching extends mode 3")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    clear_oam(ppu);
+    ppu.write(oam_start, 16);
+    ppu.write(oam_start + 1, 8);
+    ppu.write(lcdc, 0x82);
+
+    ppu.tick_dots(262);
+    REQUIRE(current_mode(ppu) == drawing_mode);
+
+    ppu.tick_dots(1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+}
+
+TEST_CASE("PPU charges only the flat object cost twice within one background tile")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    clear_oam(ppu);
+    ppu.write(oam_start, 16);
+    ppu.write(oam_start + 1, 8);
+    ppu.write(oam_start + 4, 16);
+    ppu.write(oam_start + 5, 12);
+    ppu.write(lcdc, 0x82);
+
+    ppu.tick_dots(268);
+    REQUIRE(current_mode(ppu) == drawing_mode);
+
+    ppu.tick_dots(1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+}
+
+TEST_CASE("PPU discovers objects progressively during the mode 2 scan")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    clear_oam(ppu);
+    ppu.write(lcdc, 0x82);
+    ppu.tick_dots(2);
+
+    ppu.write_oam_dma(4, 16);
+    ppu.write_oam_dma(5, 13);
+    ppu.tick_dots(255);
+    REQUIRE(current_mode(ppu) == drawing_mode);
+
+    ppu.tick_dots(1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+}
+
+TEST_CASE("PPU applies the DMG OAM write corruption pattern during mode 2")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    write_oam_word(ppu, 8, 0x0F0F);
+    write_oam_word(ppu, 10, 0x1122);
+    write_oam_word(ppu, 12, 0x3333);
+    write_oam_word(ppu, 14, 0x4455);
+    write_oam_word(ppu, 16, 0xAAAA);
+    write_oam_word(ppu, 18, 0xBBBB);
+    write_oam_word(ppu, 20, 0xCCCC);
+    write_oam_word(ppu, 22, 0xDDDD);
+    ppu.write(lcdc, 0x80);
+    ppu.tick_dots(8);
+
+    ppu.notify_oam_bus_access(0xFE00, BusAccessType::Write);
+    ppu.tick_dots(244);
+
+    const uint16_t expected =
+        static_cast<uint16_t>(((0xAAAA ^ 0x3333) & (0x0F0F ^ 0x3333)) ^ 0x3333);
+    REQUIRE(read_oam_word(ppu, 16) == expected);
+    REQUIRE(read_oam_word(ppu, 18) == 0x1122);
+    REQUIRE(read_oam_word(ppu, 20) == 0x3333);
+    REQUIRE(read_oam_word(ppu, 22) == 0x4455);
+}
+
+TEST_CASE("PPU applies the DMG OAM read corruption pattern during mode 2")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    write_oam_word(ppu, 8, 0x0F0F);
+    write_oam_word(ppu, 12, 0x3333);
+    write_oam_word(ppu, 16, 0xAAAA);
+    ppu.write(lcdc, 0x80);
+    ppu.tick_dots(8);
+
+    ppu.notify_oam_bus_access(0xFE00, BusAccessType::Read);
+    ppu.tick_dots(244);
+
+    REQUIRE(read_oam_word(ppu, 16) == static_cast<uint16_t>(0x0F0F | (0xAAAA & 0x3333)));
+}
+
+TEST_CASE("PPU applies combined DMG OAM read and internal corruption")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    const uint16_t a = 0x0F0F;
+    const uint16_t b = 0xAAAA;
+    const uint16_t c = 0x00FF;
+    const uint16_t d = 0x3333;
+    const uint16_t expected = static_cast<uint16_t>(
+        (b & (a | c | d)) | (a & c & d)
+    );
+
+    write_oam_word(ppu, 16, a);
+    write_oam_word(ppu, 24, b);
+    write_oam_word(ppu, 26, 0x1111);
+    write_oam_word(ppu, 28, d);
+    write_oam_word(ppu, 30, 0x4444);
+    write_oam_word(ppu, 32, c);
+    ppu.write(lcdc, 0x80);
+    ppu.tick_dots(16);
+
+    ppu.notify_oam_bus_access(0xFE00, BusAccessType::ReadAndInternal);
+    ppu.write(lcdc, 0x00);
+
+    REQUIRE(read_oam_word(ppu, 16) == expected);
+    REQUIRE(read_oam_word(ppu, 18) == 0x1111);
+    REQUIRE(read_oam_word(ppu, 20) == d);
+    REQUIRE(read_oam_word(ppu, 22) == 0x4444);
+    REQUIRE(read_oam_word(ppu, 24) == expected);
+    REQUIRE(read_oam_word(ppu, 32) == expected);
+    REQUIRE(read_oam_word(ppu, 34) == 0x1111);
+    REQUIRE(read_oam_word(ppu, 36) == d);
+    REQUIRE(read_oam_word(ppu, 38) == 0x4444);
+}
+
+TEST_CASE("PPU suppresses CPU OAM corruption while OAM DMA is active")
+{
+    InterruptController interrupts;
+    PPU ppu(interrupts);
+
+    interrupts.reset();
+    ppu.reset();
+    write_oam_word(ppu, 8, 0x0F0F);
+    write_oam_word(ppu, 12, 0x3333);
+    write_oam_word(ppu, 16, 0xAAAA);
+    ppu.write(lcdc, 0x80);
+    ppu.tick_dots(8);
+    ppu.set_oam_dma_active(true);
+
+    ppu.notify_oam_bus_access(0xFE00, BusAccessType::Write);
+    ppu.set_oam_dma_active(false);
+    ppu.tick_dots(244);
+
+    REQUIRE(read_oam_word(ppu, 16) == 0xAAAA);
 }
