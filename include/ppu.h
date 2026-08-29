@@ -49,10 +49,10 @@ private:
 
     struct PixelFetcher {
         uint8_t x = 0;
-        uint8_t y = 0;
         uint8_t tile_id = 0;
         uint8_t tile_data_low = 0;
         uint8_t tile_data_high = 0;
+        uint16_t tile_data_address = 0;
         uint8_t step = 0;
         bool fetching_window = false;
     };
@@ -75,7 +75,17 @@ private:
         uint8_t y = 0;
         uint8_t x = 0;
         uint8_t oam_index = 0;
-        uint8_t fetch_penalty = 0;
+    };
+
+    enum class ObjectFetchStep : uint8_t {
+        None,
+        Align,
+        OamFirst,
+        OamSecond,
+        DataLowFirst,
+        DataLowSecond,
+        DataHighFirst,
+        DataHighSecond,
     };
 
     InterruptController& interrupts;
@@ -99,43 +109,69 @@ private:
 
     bool frame_ready = false;
     int dot_counter = 0;
-    int mode3_dot_target = 172;
-    int scx_discard_dots = 0;
-    int object_fetch_dots_remaining = 0;
+    int line_dot_limit = 456;
+    int mode3_startup_dots = 0;
+    int pixel_position = -16;
     int object_fetch_index = -1;
+    int object_fetch_alignment_dots = 0;
     uint8_t screen_x = 0;
     uint8_t scanline = 0;
     uint8_t oam_scan_index = 0;
     uint8_t window_line = 0;
+    uint8_t scx_low = 0;
     bool window_y_triggered = false;
     bool window_triggered_this_line = false;
+    bool window_glitch_armed = false;
+    bool insert_bg_pixel = false;
     bool first_frame_blank = true;
+    bool startup_line = false;
     bool oam_dma_active = false;
+    bool vram_read_blocked = false;
+    bool vram_write_blocked = false;
+    bool oam_read_blocked = false;
+    bool oam_write_blocked = false;
     Mode mode = Mode::OamScan;
     PixelFetcher fetcher;
     PixelFifo bg_fifo;
     PixelFifo obj_fifo;
     std::array<ObjectCandidate, 10> line_objects{};
     std::array<bool, 10> line_object_fetched{};
+    std::array<int, 10> considered_object_tiles{};
     uint8_t line_object_count = 0;
+    uint8_t considered_object_tile_count = 0;
+    ObjectFetchStep object_fetch_step = ObjectFetchStep::None;
+    uint8_t object_tile = 0;
+    uint8_t object_attributes = 0;
+    uint8_t object_tile_data_low = 0;
+    uint8_t object_tile_data_high = 0;
+    uint16_t object_tile_address = 0;
     bool stat_interrupt_line = false;
+    uint8_t pending_stat = 0;
+    int stat_write_dots_remaining = 0;
 
     bool lcd_enabled() const;
     bool vram_accessible() const;
     bool oam_accessible() const;
     bool window_enabled() const;
     uint8_t stat_value() const;
+    void tick_dot();
+    void update_stat_write();
+    void set_access_blocking(bool vram_blocked, bool oam_blocked);
     void set_mode(Mode next_mode);
     bool stat_interrupt_active(uint8_t interrupt_selects) const;
     void update_stat_interrupt();
     void begin_scanline();
     void scan_oam_entry();
-    void tick_pixel_fetcher();
+    void begin_mode3();
+    void tick_mode3();
+    void advance_pixel_fetcher();
     void clear_fifos();
+    void push_blank_bg_pixels();
     void push_bg_pixels();
-    void fetch_object_pixels(const ObjectCandidate& object);
+    void overlay_object_pixels(const ObjectCandidate& object);
+    void trigger_window();
+    void start_object_fetch();
     bool tick_object_fetch();
     void mix_and_push_pixel();
-    int calculate_mode3_dot_target();
     void corrupt_oam(BusAccessType access_type);
 };

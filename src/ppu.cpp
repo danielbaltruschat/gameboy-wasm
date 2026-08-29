@@ -1,6 +1,5 @@
 #include "ppu.h"
 #include "interrupt_controller.h"
-#include <algorithm>
 #include <cstdint>
 #include <cassert>
 
@@ -59,18 +58,27 @@ void PPU::reset() {
 
     frame_ready = false;
     dot_counter = 0;
-    mode3_dot_target = 172;
-    scx_discard_dots = 0;
-    object_fetch_dots_remaining = 0;
+    line_dot_limit = 456;
+    mode3_startup_dots = 0;
+    pixel_position = -16;
     object_fetch_index = -1;
+    object_fetch_alignment_dots = 0;
     screen_x = 0;
     scanline = 0;
     oam_scan_index = 0;
     window_line = 0;
+    scx_low = 0;
     window_y_triggered = false;
     window_triggered_this_line = false;
+    window_glitch_armed = false;
+    insert_bg_pixel = false;
     first_frame_blank = true;
+    startup_line = false;
     oam_dma_active = false;
+    vram_read_blocked = false;
+    vram_write_blocked = false;
+    oam_read_blocked = false;
+    oam_write_blocked = false;
 
     mode = Mode::HBlank;
 
@@ -79,14 +87,24 @@ void PPU::reset() {
     obj_fifo = PixelFifo{};
     line_objects.fill(ObjectCandidate{});
     line_object_fetched.fill(false);
+    considered_object_tiles.fill(0);
     line_object_count = 0;
+    considered_object_tile_count = 0;
+    object_fetch_step = ObjectFetchStep::None;
+    object_tile = 0;
+    object_attributes = 0;
+    object_tile_data_low = 0;
+    object_tile_data_high = 0;
+    object_tile_address = 0;
 
     stat_interrupt_line = false;
+    pending_stat = 0;
+    stat_write_dots_remaining = 0;
 }
 
 void PPU::tick_dots(int dots) {
     assert(dots >= 0);
-    assert(dot_counter >= 0 && dot_counter < 456);
+    assert(dot_counter >= 0 && dot_counter < line_dot_limit);
     assert(scanline <= 153);
     assert(ly <= 153);
 
@@ -95,62 +113,70 @@ void PPU::tick_dots(int dots) {
     }
 
     for (int dot = 0; dot < dots; ++dot) {
-        dot_counter++;
+        tick_dot();
+    }
+}
 
-        if (mode == Mode::OamScan) {
-            if ((dot_counter & 0x01) == 0) {
-                scan_oam_entry();
-            }
+void PPU::tick_dot() {
+    update_stat_write();
+    dot_counter++;
 
-            if (dot_counter == 80) {
-                mode3_dot_target = calculate_mode3_dot_target();
-                set_mode(Mode::Drawing);
-            }
+    if (startup_line && mode == Mode::HBlank) {
+        if (dot_counter == 77) {
+            oam_write_blocked = true;
+        } else if (dot_counter == 79) {
+            set_mode(Mode::Drawing);
+            set_access_blocking(true, true);
+            begin_mode3();
+        }
+    } else if (mode == Mode::OamScan) {
+        if ((dot_counter & 0x01) == 0) {
+            scan_oam_entry();
         }
 
-        if (mode == Mode::Drawing) {
-            if (dot_counter < 80 + mode3_dot_target) {
-                if (!tick_object_fetch()) {
-                    tick_pixel_fetcher();
-                    mix_and_push_pixel();
-                }
-            } else {
-                if (window_triggered_this_line) {
-                    window_line++;
-                }
-                set_mode(Mode::HBlank);
-            }
+        if (dot_counter == 80) {
+            set_mode(Mode::Drawing);
+            set_access_blocking(true, true);
+            begin_mode3();
         }
+    } else if (mode == Mode::Drawing) {
+        tick_mode3();
+    }
 
-        if (scanline == 153 && dot_counter == 4) {
-            ly = 0;
-            update_stat_interrupt();
-        }
+    if (scanline == 153 && dot_counter == 4) {
+        ly = 0;
+        update_stat_interrupt();
+    }
 
-        if (dot_counter < 456) {
-            continue;
-        }
+    if (dot_counter < line_dot_limit) {
+        return;
+    }
 
-        dot_counter = 0;
-        scanline = static_cast<uint8_t>((scanline + 1) % 154);
-        ly = scanline;
+    dot_counter = 0;
+    line_dot_limit = 456;
+    startup_line = false;
+    scanline = static_cast<uint8_t>((scanline + 1) % 154);
+    ly = scanline;
 
-        if (scanline == 0) {
-            window_line = 0;
-            window_y_triggered = false;
-            set_mode(Mode::OamScan);
-            begin_scanline();
-        } else if (scanline == 144) {
-            set_mode(Mode::VBlank);
-            interrupts.request(Interrupt::VBlank);
-            frame_ready = true;
-            first_frame_blank = false;
-        } else if (scanline < 144) {
-            set_mode(Mode::OamScan);
-            begin_scanline();
-        } else {
-            set_mode(Mode::VBlank);
-        }
+    if (scanline == 0) {
+        window_line = 0;
+        window_y_triggered = false;
+        set_mode(Mode::OamScan);
+        set_access_blocking(false, true);
+        begin_scanline();
+    } else if (scanline == 144) {
+        set_mode(Mode::VBlank);
+        set_access_blocking(false, false);
+        interrupts.request(Interrupt::VBlank);
+        frame_ready = true;
+        first_frame_blank = false;
+    } else if (scanline < 144) {
+        set_mode(Mode::OamScan);
+        set_access_blocking(false, true);
+        begin_scanline();
+    } else {
+        set_mode(Mode::VBlank);
+        set_access_blocking(false, false);
     }
 }
 
@@ -171,11 +197,11 @@ bool PPU::lcd_enabled() const {
 }
 
 bool PPU::vram_accessible() const {
-    return !lcd_enabled() || mode != Mode::Drawing;
+    return !lcd_enabled() || !vram_read_blocked;
 }
 
 bool PPU::oam_accessible() const {
-    return !lcd_enabled() || mode == Mode::HBlank || mode == Mode::VBlank;
+    return !lcd_enabled() || !oam_read_blocked;
 }
 
 bool PPU::window_enabled() const {
@@ -219,14 +245,14 @@ uint8_t PPU::read(uint16_t addr) const {
 
 void PPU::write(uint16_t addr, uint8_t value) {
     if (addr >= 0x8000 && addr <= 0x9FFF) {
-        if (vram_accessible()) {
+        if (!lcd_enabled() || !vram_write_blocked) {
             vram[addr - 0x8000] = value;
         }
         return;
     }
 
     if (addr >= 0xFE00 && addr <= 0xFE9F) {
-        if (oam_accessible()) {
+        if (!lcd_enabled() || !oam_write_blocked) {
             oam[addr - 0xFE00] = value;
         }
         return;
@@ -241,37 +267,50 @@ void PPU::write(uint16_t addr, uint8_t value) {
                 ly = 0;
                 scanline = 0;
                 dot_counter = 0;
+                line_dot_limit = 456;
                 screen_x = 0;
                 window_line = 0;
+                scx_low = 0;
                 window_y_triggered = false;
                 window_triggered_this_line = false;
+                window_glitch_armed = false;
+                insert_bg_pixel = false;
                 first_frame_blank = true;
+                startup_line = false;
+                stat = pending_stat;
+                stat_write_dots_remaining = 0;
                 framebuffer = Framebuffer{};
                 set_mode(Mode::HBlank);
+                set_access_blocking(false, false);
                 clear_fifos();
             } else if (!was_enabled && lcd_enabled()) {
                 ly = 0;
                 scanline = 0;
                 dot_counter = 0;
+                line_dot_limit = 455;
                 window_line = 0;
+                scx_low = 0;
                 window_y_triggered = false;
+                window_triggered_this_line = false;
+                window_glitch_armed = false;
+                insert_bg_pixel = false;
                 first_frame_blank = true;
+                startup_line = true;
                 framebuffer = Framebuffer{};
-                set_mode(Mode::OamScan);
-                begin_scanline();
+                set_mode(Mode::HBlank);
+                set_access_blocking(false, false);
             }
             break;
         }
         case 0xFF41: {
+            pending_stat = value & 0x78;
             if (lcd_enabled()) {
-                const bool temporary_line = stat_interrupt_active(0x78);
-                if (temporary_line && !stat_interrupt_line) {
-                    interrupts.request(Interrupt::LCDStat);
-                }
-                stat_interrupt_line = temporary_line;
+                stat = 0x78;
+                stat_write_dots_remaining = 4;
+            } else {
+                stat = pending_stat;
+                stat_write_dots_remaining = 0;
             }
-
-            stat = value & 0x78;
             update_stat_interrupt();
             break;
         }
@@ -300,6 +339,9 @@ void PPU::write(uint16_t addr, uint8_t value) {
             wy = value;
             break;
         case 0xFF4B:
+            if (window_triggered_this_line && wx != value) {
+                window_glitch_armed = true;
+            }
             wx = value;
             break;
         default:
@@ -329,13 +371,20 @@ void PPU::notify_oam_bus_access(uint16_t addr, BusAccessType access_type) {
 }
 
 bool PPU::stat_interrupt_active(uint8_t interrupt_selects) const {
+    const bool startup_hblank =
+        startup_line && mode == Mode::HBlank && dot_counter < 79;
+
     return
         lcd_enabled() &&
         (
             ((interrupt_selects & 0x40) != 0 && ly == lyc) ||
             ((interrupt_selects & 0x20) != 0 && mode == Mode::OamScan) ||
             ((interrupt_selects & 0x10) != 0 && mode == Mode::VBlank) ||
-            ((interrupt_selects & 0x08) != 0 && mode == Mode::HBlank)
+            (
+                (interrupt_selects & 0x08) != 0 &&
+                mode == Mode::HBlank &&
+                !startup_hblank
+            )
         );
 }
 
@@ -347,6 +396,25 @@ void PPU::update_stat_interrupt() {
     }
 
     stat_interrupt_line = interrupt_line;
+}
+
+void PPU::update_stat_write() {
+    if (stat_write_dots_remaining == 0) {
+        return;
+    }
+
+    stat_write_dots_remaining--;
+    if (stat_write_dots_remaining == 0) {
+        stat = pending_stat;
+        update_stat_interrupt();
+    }
+}
+
+void PPU::set_access_blocking(bool vram_blocked, bool oam_blocked) {
+    vram_read_blocked = vram_blocked;
+    vram_write_blocked = vram_blocked;
+    oam_read_blocked = oam_blocked;
+    oam_write_blocked = oam_blocked;
 }
 
 void PPU::set_mode(Mode next_mode) {
@@ -367,21 +435,25 @@ void PPU::begin_scanline() {
     assert(mode == Mode::OamScan);
 
     screen_x = 0;
-    scx_discard_dots = scx & 0x07;
-    object_fetch_dots_remaining = 0;
+    pixel_position = -16;
+    mode3_startup_dots = 0;
     object_fetch_index = -1;
+    object_fetch_alignment_dots = 0;
+    object_fetch_step = ObjectFetchStep::None;
     oam_scan_index = 0;
     if (ly == wy) {
         window_y_triggered = true;
     }
     window_triggered_this_line = false;
+    window_glitch_armed = false;
+    insert_bg_pixel = false;
     fetcher = {};
-    fetcher.y = static_cast<uint8_t>(scy + ly);
     clear_fifos();
-    obj_fifo.size = obj_fifo.pixels.size();
     line_objects.fill(ObjectCandidate{});
     line_object_fetched.fill(false);
+    considered_object_tiles.fill(0);
     line_object_count = 0;
+    considered_object_tile_count = 0;
 }
 
 void PPU::scan_oam_entry() {
@@ -407,136 +479,148 @@ void PPU::scan_oam_entry() {
     oam_scan_index++;
 }
 
-int PPU::calculate_mode3_dot_target() {
-    int target = 172 + scx_discard_dots;
-    const bool use_window = window_enabled();
-    const int window_origin_x = static_cast<int>(wx) - 7;
-
-    if (use_window) {
-        target += 6;
-        if (window_origin_x < 0) {
-            target -= window_origin_x;
-        }
-        if (wx == 0 && scx_discard_dots > 0) {
-            target--;
-        }
-    }
-
-    if ((lcdc & 0x02) == 0) {
-        return target;
-    }
-
-    std::array<uint8_t, 10> order{};
-    for (uint8_t index = 0; index < line_object_count; ++index) {
-        order[index] = index;
-    }
-    std::stable_sort(
-        order.begin(),
-        order.begin() + line_object_count,
-        [this](uint8_t left, uint8_t right) {
-            return line_objects[left].x < line_objects[right].x;
-        }
-    );
-
-    std::array<int, 10> considered_tiles{};
-    uint8_t considered_tile_count = 0;
-
-    for (uint8_t order_index = 0; order_index < line_object_count; ++order_index) {
-        ObjectCandidate& object = line_objects[order[order_index]];
-        if (object.x >= 168) {
-            continue;
-        }
-
-        if (object.x == 0) {
-            object.fetch_penalty = 11;
-            target += object.fetch_penalty;
-            continue;
-        }
-
-        const int object_left = static_cast<int>(object.x) - 8;
-        const bool over_window = use_window && object_left >= window_origin_x;
-        const int tile_coordinate = over_window
-            ? object_left - window_origin_x
-            : object_left + scx;
-        const int tile_number = tile_coordinate >= 0
-            ? tile_coordinate / 8
-            : (tile_coordinate - 7) / 8;
-        const int tile_key = tile_number + (over_window ? 0x100 : 0);
-        const auto considered_end = considered_tiles.begin() + considered_tile_count;
-        const bool tile_was_considered = std::find(
-            considered_tiles.begin(),
-            considered_end,
-            tile_key
-        ) != considered_end;
-
-        int penalty = 6;
-        if (!tile_was_considered) {
-            int pixel_in_tile = tile_coordinate % 8;
-            if (pixel_in_tile < 0) {
-                pixel_in_tile += 8;
-            }
-            penalty += std::max(0, 5 - pixel_in_tile);
-            considered_tiles[considered_tile_count++] = tile_key;
-        }
-
-        object.fetch_penalty = static_cast<uint8_t>(penalty);
-        target += penalty;
-    }
-
-    return target;
-}
-
-void PPU::tick_pixel_fetcher() {
+void PPU::begin_mode3() {
     assert(mode == Mode::Drawing);
 
-    if (screen_x >= Framebuffer::width) {
+    mode3_startup_dots = 4;
+    pixel_position = -16;
+    scx_low = scx & 0x07;
+    screen_x = 0;
+    object_fetch_index = -1;
+    object_fetch_alignment_dots = 0;
+    object_fetch_step = ObjectFetchStep::None;
+    fetcher = {};
+    clear_fifos();
+    push_blank_bg_pixels();
+}
+
+void PPU::tick_mode3() {
+    assert(mode == Mode::Drawing);
+
+    if (mode3_startup_dots > 0) {
+        mode3_startup_dots--;
         return;
     }
 
-    fetcher.step++;
+    if (!window_triggered_this_line && window_enabled()) {
+        const int window_left = static_cast<int>(wx) - 7;
+        if (pixel_position >= window_left) {
+            trigger_window();
+        }
+    } else if (
+        window_glitch_armed &&
+        window_triggered_this_line &&
+        pixel_position + 7 == wx
+    ) {
+        insert_bg_pixel = true;
+        window_glitch_armed = false;
+    }
 
-    if (fetcher.step == 2) {
+    if (tick_object_fetch()) {
+        return;
+    }
+
+    start_object_fetch();
+    if (tick_object_fetch()) {
+        return;
+    }
+
+    mix_and_push_pixel();
+    advance_pixel_fetcher();
+
+    if (screen_x == Framebuffer::width) {
+        if (window_triggered_this_line) {
+            window_line++;
+        }
+        set_mode(Mode::HBlank);
+        set_access_blocking(false, false);
+    }
+}
+
+void PPU::advance_pixel_fetcher() {
+    assert(mode == Mode::Drawing);
+
+    switch (fetcher.step) {
+    case 0: {
+        if (fetcher.fetching_window && !window_enabled()) {
+            fetcher.fetching_window = false;
+        }
+
         const uint16_t map_base = fetcher.fetching_window
             ? ((lcdc & 0x40) != 0 ? 0x1C00 : 0x1800)
             : ((lcdc & 0x08) != 0 ? 0x1C00 : 0x1800);
         const uint8_t pixel_y = fetcher.fetching_window
             ? window_line
             : static_cast<uint8_t>(scy + ly);
-        const uint8_t tile_x = fetcher.fetching_window
-            ? fetcher.x & 0x1F
-            : static_cast<uint8_t>((scx / 8 + fetcher.x) & 0x1F);
+        uint8_t tile_x = 0;
+
+        if (fetcher.fetching_window) {
+            tile_x = fetcher.x & 0x1F;
+        } else if (pixel_position < -8) {
+            tile_x = scx >> 3;
+        } else {
+            tile_x = static_cast<uint8_t>((scx + pixel_position + 8) / 8) & 0x1F;
+        }
+
         const uint8_t tile_y = (pixel_y / 8) & 0x1F;
-
-        fetcher.y = pixel_y;
-        fetcher.tile_id = vram[map_base + tile_y * 32 + tile_x];
-    } else if (fetcher.step == 4) {
+        fetcher.tile_data_address = map_base + tile_y * 32 + tile_x;
+        fetcher.step = 1;
+        break;
+    }
+    case 1:
+        fetcher.tile_id = vram[fetcher.tile_data_address];
+        fetcher.step = 2;
+        break;
+    case 2: {
         const int tile_base = (lcdc & 0x10) != 0
             ? static_cast<int>(fetcher.tile_id) * 16
             : 0x1000 + static_cast<int8_t>(fetcher.tile_id) * 16;
         const uint8_t pixel_y = fetcher.fetching_window
             ? window_line
             : static_cast<uint8_t>(scy + ly);
-        const int row_offset = (pixel_y & 0x07) * 2;
-
-        fetcher.tile_data_low = vram[tile_base + row_offset];
-    } else if (fetcher.step == 6) {
+        fetcher.tile_data_address = static_cast<uint16_t>(
+            tile_base + (pixel_y & 0x07) * 2
+        );
+        fetcher.step = 3;
+        break;
+    }
+    case 3:
+        fetcher.tile_data_low = vram[fetcher.tile_data_address];
+        fetcher.step = 4;
+        break;
+    case 4: {
         const int tile_base = (lcdc & 0x10) != 0
             ? static_cast<int>(fetcher.tile_id) * 16
             : 0x1000 + static_cast<int8_t>(fetcher.tile_id) * 16;
         const uint8_t pixel_y = fetcher.fetching_window
             ? window_line
             : static_cast<uint8_t>(scy + ly);
-        const int row_offset = (pixel_y & 0x07) * 2;
-
-        fetcher.tile_data_high = vram[tile_base + row_offset + 1];
-    } else if (fetcher.step >= 8) {
+        fetcher.tile_data_address = static_cast<uint16_t>(
+            tile_base + (pixel_y & 0x07) * 2 + 1
+        );
+        fetcher.step = 5;
+        break;
+    }
+    case 5:
+        fetcher.tile_data_high = vram[fetcher.tile_data_address];
+        if (fetcher.fetching_window) {
+            fetcher.x = static_cast<uint8_t>((fetcher.x + 1) & 0x1F);
+        }
+        fetcher.step = 6;
+        if (bg_fifo.size == 0) {
+            push_bg_pixels();
+            fetcher.step = 0;
+        }
+        break;
+    case 6:
         if (bg_fifo.size <= 8) {
             push_bg_pixels();
-            fetcher.x++;
             fetcher.step = 0;
-        } else {
-            fetcher.step = 7;
         }
+        break;
+    default:
+        assert(false);
+        break;
     }
 }
 
@@ -555,38 +639,28 @@ void PPU::push_bg_pixels() {
     }
 }
 
-void PPU::fetch_object_pixels(const ObjectCandidate& object) {
-    assert(obj_fifo.size == obj_fifo.pixels.size());
+void PPU::push_blank_bg_pixels() {
+    assert(bg_fifo.size == 0);
 
-    const int object_height = (lcdc & 0x04) != 0 ? 16 : 8;
-    const uint16_t object_offset = static_cast<uint16_t>(object.oam_index) * 4;
-    const uint8_t object_tile = oam_dma_active ? 0xFF : oam[object_offset + 2];
-    const uint8_t object_attributes = oam_dma_active ? 0xFF : oam[object_offset + 3];
-    int row = static_cast<int>(ly) + 16 - object.y;
+    for (int pixel = 0; pixel < 8; ++pixel) {
+        const uint8_t tail = (bg_fifo.head + bg_fifo.size) % bg_fifo.pixels.size();
+        bg_fifo.pixels[tail] = {};
+        bg_fifo.size++;
+    }
+}
 
-    if ((object_attributes & 0x40) != 0) {
-        row = object_height - 1 - row;
+void PPU::overlay_object_pixels(const ObjectCandidate& object) {
+    while (obj_fifo.size < obj_fifo.pixels.size()) {
+        const uint8_t tail = (obj_fifo.head + obj_fifo.size) % obj_fifo.pixels.size();
+        obj_fifo.pixels[tail] = {};
+        obj_fifo.size++;
     }
 
-    uint8_t tile = object_tile;
-    if (object_height == 16) {
-        tile &= 0xFE;
-        if (row >= 8) {
-            tile++;
-            row -= 8;
-        }
-    }
-
-    const uint16_t tile_address =
-        static_cast<uint16_t>(tile) * 16 +
-        static_cast<uint16_t>(row) * 2;
-    const uint8_t tile_data_low = vram[tile_address];
-    const uint8_t tile_data_high = vram[tile_address + 1];
     const int object_left = static_cast<int>(object.x) - 8;
 
     for (int pixel = 0; pixel < 8; ++pixel) {
         const int screen_position = object_left + pixel;
-        const int fifo_offset = screen_position - screen_x;
+        const int fifo_offset = screen_position - pixel_position;
 
         if (fifo_offset < 0 || fifo_offset >= static_cast<int>(obj_fifo.pixels.size())) {
             continue;
@@ -596,8 +670,8 @@ void PPU::fetch_object_pixels(const ObjectCandidate& object) {
             ? static_cast<uint8_t>(pixel)
             : static_cast<uint8_t>(7 - pixel);
         const uint8_t color =
-            ((tile_data_high >> bit) & 0x01) << 1 |
-            ((tile_data_low >> bit) & 0x01);
+            ((object_tile_data_low >> bit) & 0x01) |
+            (((object_tile_data_high >> bit) & 0x01) << 1);
 
         if (color == 0) {
             continue;
@@ -628,104 +702,207 @@ void PPU::fetch_object_pixels(const ObjectCandidate& object) {
     }
 }
 
-bool PPU::tick_object_fetch() {
-    if (object_fetch_index >= 0) {
-        assert(object_fetch_dots_remaining > 0);
+void PPU::trigger_window() {
+    window_triggered_this_line = true;
+    window_glitch_armed = false;
+    bg_fifo = {};
+    fetcher = {};
+    fetcher.fetching_window = true;
+}
 
-        object_fetch_dots_remaining--;
-        if (object_fetch_dots_remaining == 0) {
-            if ((lcdc & 0x02) != 0) {
-                fetch_object_pixels(line_objects[object_fetch_index]);
-            }
-            object_fetch_index = -1;
-        }
-        return true;
+void PPU::start_object_fetch() {
+    if (
+        object_fetch_step != ObjectFetchStep::None ||
+        (lcdc & 0x02) == 0 ||
+        pixel_position >= Framebuffer::width
+    ) {
+        return;
     }
 
-    if ((lcdc & 0x02) == 0 || screen_x >= Framebuffer::width) {
-        return false;
-    }
-
+    const int object_match = pixel_position < -8 ? 0 : pixel_position + 8;
     int next_object = -1;
+
     for (uint8_t index = 0; index < line_object_count; ++index) {
         const ObjectCandidate& object = line_objects[index];
-        const int object_left = static_cast<int>(object.x) - 8;
-        const bool reached_object =
-            object_left == screen_x ||
-            (screen_x == 0 && object_left < 0);
+        if (line_object_fetched[index] || object.x >= 168) {
+            continue;
+        }
 
-        if (
-            line_object_fetched[index] ||
-            object.fetch_penalty == 0 ||
-            !reached_object
-        ) {
+        if (object.x < object_match) {
+            line_object_fetched[index] = true;
+            continue;
+        }
+
+        if (object.x != object_match) {
             continue;
         }
 
         if (
             next_object < 0 ||
-            object.x < line_objects[next_object].x ||
-            (
-                object.x == line_objects[next_object].x &&
-                object.oam_index < line_objects[next_object].oam_index
-            )
+            object.oam_index < line_objects[next_object].oam_index
         ) {
             next_object = index;
         }
     }
 
-    if (next_object < 0) {
+    if (next_object >= 0) {
+        const ObjectCandidate& object = line_objects[next_object];
+        int alignment_dots = 5;
+
+        if (object.x != 0) {
+            const int object_left = static_cast<int>(object.x) - 8;
+            const int window_left = static_cast<int>(wx) - 7;
+            const bool over_window =
+                window_triggered_this_line && object_left >= window_left;
+            const int tile_coordinate = over_window
+                ? object_left - window_left
+                : object_left + scx;
+            const int tile_number = tile_coordinate >= 0
+                ? tile_coordinate / 8
+                : (tile_coordinate - 7) / 8;
+            const int tile_key = tile_number + (over_window ? 0x100 : 0);
+            bool tile_was_considered = false;
+
+            for (uint8_t index = 0; index < considered_object_tile_count; ++index) {
+                if (considered_object_tiles[index] == tile_key) {
+                    tile_was_considered = true;
+                    break;
+                }
+            }
+
+            if (tile_was_considered) {
+                alignment_dots = 0;
+            } else {
+                int pixel_in_tile = tile_coordinate % 8;
+                if (pixel_in_tile < 0) {
+                    pixel_in_tile += 8;
+                }
+                alignment_dots = 5 - pixel_in_tile;
+                if (alignment_dots < 0) {
+                    alignment_dots = 0;
+                }
+                considered_object_tiles[considered_object_tile_count++] = tile_key;
+            }
+        }
+
+        line_object_fetched[next_object] = true;
+        object_fetch_index = next_object;
+        object_fetch_alignment_dots = alignment_dots;
+        object_fetch_step = alignment_dots == 0
+            ? ObjectFetchStep::OamFirst
+            : ObjectFetchStep::Align;
+    }
+}
+
+bool PPU::tick_object_fetch() {
+    if (object_fetch_step == ObjectFetchStep::None) {
         return false;
     }
 
-    line_object_fetched[next_object] = true;
-    object_fetch_index = next_object;
-    object_fetch_dots_remaining = line_objects[next_object].fetch_penalty;
-    return tick_object_fetch();
+    if ((lcdc & 0x02) == 0) {
+        object_fetch_step = ObjectFetchStep::None;
+        object_fetch_index = -1;
+        return false;
+    }
+
+    assert(object_fetch_index >= 0);
+    const ObjectCandidate& object = line_objects[object_fetch_index];
+
+    switch (object_fetch_step) {
+    case ObjectFetchStep::Align:
+        assert(object_fetch_alignment_dots > 0);
+        advance_pixel_fetcher();
+        object_fetch_alignment_dots--;
+        if (object_fetch_alignment_dots == 0) {
+            object_fetch_step = ObjectFetchStep::OamFirst;
+        }
+        break;
+    case ObjectFetchStep::OamFirst: {
+        const uint16_t offset = static_cast<uint16_t>(object.oam_index) * 4;
+        object_tile = oam_dma_active ? 0xFF : oam[offset + 2];
+        object_attributes = oam_dma_active ? 0xFF : oam[offset + 3];
+        object_fetch_step = ObjectFetchStep::OamSecond;
+        break;
+    }
+    case ObjectFetchStep::OamSecond: {
+        const int object_height = (lcdc & 0x04) != 0 ? 16 : 8;
+        int row = static_cast<int>(ly) + 16 - object.y;
+        if ((object_attributes & 0x40) != 0) {
+            row = object_height - 1 - row;
+        }
+
+        uint8_t tile = object_tile;
+        if (object_height == 16) {
+            tile &= 0xFE;
+            if (row >= 8) {
+                tile++;
+                row -= 8;
+            }
+        }
+
+        object_tile_address = static_cast<uint16_t>(tile) * 16 + row * 2;
+        object_fetch_step = ObjectFetchStep::DataLowFirst;
+        break;
+    }
+    case ObjectFetchStep::DataLowFirst:
+        object_tile_data_low = vram[object_tile_address];
+        object_fetch_step = ObjectFetchStep::DataLowSecond;
+        break;
+    case ObjectFetchStep::DataLowSecond:
+        object_fetch_step = ObjectFetchStep::DataHighFirst;
+        break;
+    case ObjectFetchStep::DataHighFirst:
+        object_fetch_step = ObjectFetchStep::DataHighSecond;
+        break;
+    case ObjectFetchStep::DataHighSecond:
+        object_tile_data_high = vram[object_tile_address + 1];
+        overlay_object_pixels(object);
+        object_fetch_step = ObjectFetchStep::None;
+        object_fetch_index = -1;
+        break;
+    case ObjectFetchStep::None:
+        break;
+    }
+
+    return true;
 }
 
 void PPU::mix_and_push_pixel() {
-    if (screen_x >= Framebuffer::width) {
+    if (screen_x >= Framebuffer::width || (bg_fifo.size == 0 && !insert_bg_pixel)) {
         return;
     }
 
-    const bool use_window = window_enabled();
-    const int window_x = wx < 7 ? 0 : wx - 7;
-
-    if (
-        use_window &&
-        !window_triggered_this_line &&
-        screen_x >= window_x
-    ) {
-        window_triggered_this_line = true;
-        bg_fifo = {};
-        fetcher = {};
-        fetcher.y = window_line;
-        fetcher.fetching_window = true;
-        scx_discard_dots = wx < 7 ? 7 - wx : 0;
-        return;
+    FifoPixel background_pixel{};
+    if (insert_bg_pixel) {
+        insert_bg_pixel = false;
+    } else {
+        background_pixel = bg_fifo.pixels[bg_fifo.head];
+        bg_fifo.head = (bg_fifo.head + 1) % bg_fifo.pixels.size();
+        bg_fifo.size--;
     }
 
-    if (bg_fifo.size == 0) {
-        return;
+    FifoPixel object_pixel{};
+    if (obj_fifo.size > 0) {
+        object_pixel = obj_fifo.pixels[obj_fifo.head];
+        obj_fifo.pixels[obj_fifo.head] = {};
+        obj_fifo.head = (obj_fifo.head + 1) % obj_fifo.pixels.size();
+        obj_fifo.size--;
     }
 
-    const FifoPixel background_pixel = bg_fifo.pixels[bg_fifo.head];
-    bg_fifo.head = (bg_fifo.head + 1) % bg_fifo.pixels.size();
-    bg_fifo.size--;
+    if (pixel_position < -8) {
+        if ((pixel_position & 0x07) == scx_low) {
+            pixel_position = -8;
+        }
+    }
 
-    if (scx_discard_dots > 0) {
-        scx_discard_dots--;
+    if (pixel_position < 0) {
+        pixel_position++;
         return;
     }
 
     const uint8_t background_color =
         (lcdc & 0x01) != 0 ? background_pixel.color : 0;
     const bool objects_enabled = (lcdc & 0x02) != 0;
-
-    const FifoPixel object_pixel = obj_fifo.pixels[obj_fifo.head];
-    obj_fifo.pixels[obj_fifo.head] = {};
-    obj_fifo.head = (obj_fifo.head + 1) % obj_fifo.pixels.size();
 
     const bool object_visible =
         objects_enabled &&
@@ -745,6 +922,7 @@ void PPU::mix_and_push_pixel() {
             : apply_palette(output_color, output_palette)
     );
     screen_x++;
+    pixel_position++;
 }
 
 void PPU::corrupt_oam(BusAccessType access_type) {
