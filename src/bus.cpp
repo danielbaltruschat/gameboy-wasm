@@ -8,6 +8,12 @@
 #include "serial.h"
 #include "timer.h"
 
+void MemBus::reset() {
+    oam_dma.reset();
+    ppu.set_oam_dma_active(false);
+    open_bus_value = 0xFF;
+}
+
 uint8_t MemBus::read(uint16_t addr) {
     notify_cpu_address_bus(addr, BusAccessType::Read);
 
@@ -19,7 +25,9 @@ uint8_t MemBus::read(uint16_t addr) {
         return read_blocked_by_dma(addr);
 
     uint8_t value = read_unchecked(addr);
-    update_open_bus(addr, value);
+    if (addr > 0x00FF || !boot_rom.mapped()) {
+        update_open_bus(addr, value);
+    }
 
     return value;
 }
@@ -36,7 +44,9 @@ uint8_t MemBus::read_and_internal(uint16_t addr) {
     }
 
     const uint8_t value = read_unchecked(addr);
-    update_open_bus(addr, value);
+    if (addr > 0x00FF || !boot_rom.mapped()) {
+        update_open_bus(addr, value);
+    }
     return value;
 }
 

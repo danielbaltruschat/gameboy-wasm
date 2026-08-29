@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -56,6 +57,7 @@ struct BusFixture {
         ppu.reset();
         timer.reset();
         joypad.reset();
+        bus.reset();
     }
 };
 
@@ -136,4 +138,63 @@ TEST_CASE("Unmapped cartridge RAM reads the external bus latch")
     fixture.bus.write(0xC000, 0x5A);
 
     REQUIRE(fixture.bus.read(0xA000) == 0x5A);
+}
+
+TEST_CASE("Bus reset stops OAM DMA and restores the external bus latch")
+{
+    BusFixture fixture;
+
+    fixture.bus.write(0xC000, 0x5A);
+    fixture.bus.write(0xFF46, 0xC0);
+    fixture.bus.tick_dma_dots(8);
+
+    REQUIRE(fixture.bus.dma_active());
+    REQUIRE(fixture.bus.read(0xA000) == 0x5A);
+
+    fixture.bus.reset();
+
+    REQUIRE_FALSE(fixture.bus.dma_active());
+    REQUIRE(fixture.bus.read(0xA000) == 0xFF);
+}
+
+TEST_CASE("Boot ROM reads leave the external bus latch unchanged")
+{
+    BusFixture fixture;
+    std::vector<uint8_t> boot_rom(BootRom::dmg_size, 0xA5);
+
+    fixture.boot_rom.load_dmg(boot_rom);
+    fixture.bus.write(0xC000, 0x5A);
+
+    REQUIRE(fixture.bus.read(0x0000) == 0xA5);
+    REQUIRE(fixture.bus.read(0xA000) == 0x5A);
+}
+
+TEST_CASE("Unused DMG IO registers ignore writes and read as set")
+{
+    BusFixture fixture;
+    constexpr std::array<uint16_t, 13> unused_registers{
+        0xFF03,
+        0xFF08,
+        0xFF09,
+        0xFF0A,
+        0xFF0B,
+        0xFF0C,
+        0xFF0D,
+        0xFF0E,
+        0xFF15,
+        0xFF1F,
+        0xFF27,
+        0xFF28,
+        0xFF29,
+    };
+
+    for (const uint16_t addr : unused_registers) {
+        fixture.bus.write(addr, 0x00);
+        REQUIRE(fixture.bus.read(addr) == 0xFF);
+    }
+
+    for (uint16_t addr = 0xFF4C; addr <= 0xFF7F; ++addr) {
+        fixture.bus.write(addr, 0x00);
+        REQUIRE(fixture.bus.read(addr) == 0xFF);
+    }
 }
