@@ -1,2 +1,4 @@
 - MMM01, MBC6/7, HuC1/HuC3, TAMA5, Camera and other special hardware remain unsupported.
 - CPU impl
+- APU
+- Serial (ext.)
