@@ -22,7 +22,7 @@ public:
     void load_rom(std::span<const uint8_t> rom);
     void reset();
 
-    void step_m_cycle();
+    bool step_m_cycle();
     int step_instruction();          // execute one CPU instruction, tick hardware
     void step_frame();               // run until one video frame is produced
 
@@ -51,4 +51,7 @@ private:
 
     uint64_t total_dots = 0;
     uint32_t rtc_dots = 0;
+
+    static void tick_cpu_dot(void* context);
+    void tick_dot();
 };

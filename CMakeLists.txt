@@ -13,7 +13,6 @@ add_library(gameboy_core
     "src/bus.cpp"
     "src/cartridge.cpp"
     "src/cpu.cpp"
-    "src/cpu_instructions.cpp"
     "src/gameboy.cpp"
     "src/interrupt_controller.cpp"
     "src/keypad.cpp"

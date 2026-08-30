@@ -95,3 +95,34 @@ TEST_CASE("GameBoy reset clears coordinated frame state")
 
     REQUIRE_FALSE(gameboy.frame_ready());
 }
+
+TEST_CASE("GameBoy STOP wakes only from a selected falling joypad line")
+{
+    auto rom = make_rom();
+    rom[0x0000] = 0x3E; // LD A,10: select action buttons only.
+    rom[0x0001] = 0x10;
+    rom[0x0002] = 0xE0; // LDH (00),A
+    rom[0x0003] = 0x00;
+    rom[0x0004] = 0x10; // STOP 00
+    rom[0x0005] = 0x00;
+    rom[0x0006] = 0x00; // NOP after wake-up.
+
+    GameBoy gameboy;
+    gameboy.load_rom(rom);
+    gameboy.reset();
+
+    REQUIRE(gameboy.step_instruction() == 2);
+    REQUIRE(gameboy.step_instruction() == 3);
+    REQUIRE(gameboy.step_instruction() == 1);
+    REQUIRE_FALSE(gameboy.step_m_cycle());
+    REQUIRE(gameboy.step_instruction() == 0);
+
+    gameboy.set_button(JoypadButton::Right, true);
+    REQUIRE_FALSE(gameboy.step_m_cycle());
+
+    gameboy.set_button(JoypadButton::A, true);
+    for (int cycle = 0; cycle < 32767; ++cycle) {
+        REQUIRE_FALSE(gameboy.step_m_cycle());
+    }
+    REQUIRE(gameboy.step_m_cycle());
+}
