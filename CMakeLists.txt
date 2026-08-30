@@ -37,6 +37,14 @@ target_link_libraries(gameboy_wasm PRIVATE
     gameboy_core
 )
 
+add_executable(dmg_test_runner
+    "tools/dmg_test_runner.cpp"
+)
+
+target_link_libraries(dmg_test_runner PRIVATE
+    gameboy_core
+)
+
 include(CTest)
 
 if(BUILD_TESTING)
