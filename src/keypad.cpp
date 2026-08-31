@@ -130,11 +130,11 @@ int Joypad::switching_delay(uint8_t previous_select, uint8_t next_select) const
     case 0x06:
     case 0x0C:
     case 0x0E:
-        return 48;
+        return 24;
     case 0x08:
     case 0x09:
     case 0x0D:
-        return 24;
+        return 12;
     default:
         return 0;
     }
