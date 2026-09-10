@@ -62,6 +62,19 @@ void MemBus::write(uint16_t addr, uint8_t value) {
     write_unchecked(addr, value);
 }
 
+void MemBus::write_cpu_stat(uint8_t value) {
+    constexpr uint16_t address = 0xFF41;
+    notify_cpu_address_bus(address, BusAccessType::Write);
+    update_open_bus(address, value);
+
+    if (oam_dma.is_active() && oam_dma.blocks_cpu_access(address)) {
+        write_blocked_by_dma(value);
+        return;
+    }
+
+    ppu.write_cpu_stat(value);
+}
+
 void MemBus::internal_cycle(uint16_t addr) {
     notify_cpu_address_bus(addr, BusAccessType::Internal);
 }

@@ -30,6 +30,7 @@ public:
 
     uint8_t read(uint16_t addr) const;
     void write(uint16_t addr, uint8_t value);
+    void write_cpu_stat(uint8_t value);
     uint8_t read_vram_dma(uint16_t addr) const;
 
     void write_oam_dma(uint16_t offset, uint8_t value);
@@ -116,7 +117,6 @@ private:
     int mode3_startup_dots = 0;
     int pixel_position = -16;
     int object_fetch_index = -1;
-    int object_fetch_alignment_dots = 0;
     uint8_t screen_x = 0;
     uint8_t scanline = 0;
     uint8_t oam_scan_index = 0;
@@ -133,19 +133,24 @@ private:
     bool startup_line = false;
     bool oam_dma_active = false;
     bool object_fetch_aborted = false;
+    bool object_fetch_started_this_line = false;
+    int oam_mode_interrupt_delay = 0;
+    bool oam_mode_interrupt_active = false;
+    int hblank_mode_interrupt_delay = 0;
+    bool hblank_mode_interrupt_active = false;
     bool vram_read_blocked = false;
     bool vram_write_blocked = false;
     bool oam_read_blocked = false;
     bool oam_write_blocked = false;
     Mode mode = Mode::OamScan;
+    Mode stat_mode = Mode::HBlank;
+    Mode pending_stat_mode = Mode::HBlank;
     PixelFetcher fetcher;
     PixelFifo bg_fifo;
     PixelFifo obj_fifo;
     std::array<ObjectCandidate, 10> line_objects{};
     std::array<bool, 10> line_object_fetched{};
-    std::array<int, 10> considered_object_tiles{};
     uint8_t line_object_count = 0;
-    uint8_t considered_object_tile_count = 0;
     ObjectFetchStep object_fetch_step = ObjectFetchStep::None;
     uint8_t object_tile = 0;
     uint8_t object_attributes = 0;
@@ -155,6 +160,7 @@ private:
     bool stat_interrupt_line = false;
     uint8_t pending_stat = 0;
     int stat_write_dots_remaining = 0;
+    int stat_mode_delay = 0;
     int oam_dma_offset = 0;
     int accessed_oam_row = -1;
 
@@ -169,7 +175,7 @@ private:
     void set_mode(Mode next_mode);
     bool stat_interrupt_active(uint8_t interrupt_selects) const;
     void update_stat_interrupt();
-    void set_ly_for_comparison(int value);
+    void set_ly_for_comparison(int value, bool update_interrupt = true);
     void begin_scanline();
     void scan_oam_entry();
     void begin_mode3();
@@ -182,6 +188,7 @@ private:
     void overlay_object_pixels(const ObjectCandidate& object);
     void trigger_window();
     void start_object_fetch();
+    bool object_fetch_remaining() const;
     bool tick_object_fetch();
     void mix_and_push_pixel();
     void finish_drawing_if_complete();

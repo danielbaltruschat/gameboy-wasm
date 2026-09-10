@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -71,6 +72,7 @@ private:
     bool ime_enable_pending = false;
     bool ime_promotion_blocked = false;
     bool halted = false;
+    bool just_halted = false;
     bool stopped = false;
     bool halt_bug = false;
     bool locked_up = false;
@@ -88,6 +90,16 @@ private:
     uint16_t operand16 = 0;
     uint16_t interrupt_vector = 0;
     uint32_t stop_wakeup_cycles_remaining = 0;
+    bool scheduling_bus_writes = false;
+    std::array<uint16_t, 2> scheduled_io_write_addresses{};
+    uint8_t scheduled_io_write_count = 0;
+
+    struct TimedWrite {
+        uint16_t address = 0;
+        uint8_t value = 0;
+        uint8_t dots_remaining = 0;
+    };
+    std::array<TimedWrite, 4> timed_writes{};
 
     void execute_cpu_m_cycle();
     void fetch_opcode();
@@ -97,6 +109,11 @@ private:
     void execute_interrupt_m_cycle();
     void start_interrupt();
     void finish_instruction();
+    void schedule_dmg_io_write(uint16_t addr, uint8_t value,
+                               uint8_t dots_until_normal_write);
+    void schedule_write(uint16_t addr, uint8_t value, uint8_t dots_until_write);
+    void tick_scheduled_writes();
+    void tick_cpu_dot(DotCallback tick_dot, void* context);
 
     bool interrupt_pending() const;
     static uint16_t vector_for_interrupt(uint8_t interrupt);
@@ -106,6 +123,7 @@ private:
     uint8_t read8(uint16_t addr);
     uint8_t read8_and_internal(uint16_t addr);
     void write8(uint16_t addr, uint8_t value);
+    void write8_now(uint16_t addr, uint8_t value);
     void internal_cycle(uint16_t addr);
 
     uint8_t read_register(int index) const;

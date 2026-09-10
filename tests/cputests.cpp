@@ -661,7 +661,29 @@ TEST_CASE("CPU EI followed by HALT uses normal IME-one interrupt behavior")
     REQUIRE(cpu.testMemory[0x7FFE] == 0x02);
 }
 
-TEST_CASE("CPU HALT wakes without the halt bug when an interrupt arrives later")
+TEST_CASE("CPU begins the interrupt dummy cycle at the HALT wake boundary")
+{
+    InterruptController interrupts;
+    interrupts.reset();
+    interrupts.write_ie(0x01);
+    interrupts.write_if(0x01);
+
+    CPU cpu(nullptr, &interrupts, true);
+    cpu.testMemory.assign(0x10000, 0);
+    cpu.testMemory[0] = 0xFB; // EI
+    cpu.testMemory[1] = 0x76; // HALT
+    cpu.sp = 0x8000;
+
+    REQUIRE(cpu.step() == 1);
+    REQUIRE(cpu.step() == 1);
+    REQUIRE(cpu.step_m_cycle()); // HALT wake and interrupt dummy cycle.
+    REQUIRE(cpu.sp == 0x8000);
+
+    REQUIRE(cpu.step_m_cycle()); // First stack write cycle.
+    REQUIRE(cpu.sp == 0x7FFF);
+}
+
+TEST_CASE("CPU begins the IME-zero resumed opcode at the HALT wake boundary")
 {
     InterruptController interrupts;
     interrupts.reset();
@@ -749,7 +771,7 @@ TEST_CASE("CPU undefined opcodes lock the core instead of acting as NOP")
     }
 }
 
-TEST_CASE("CPU performs the sampled bus action between the third and fourth dots")
+TEST_CASE("CPU applies a bus action after advancing the M-cycle dots")
 {
     CPU cpu(nullptr, true);
     cpu.testMemory = {0x02, 0x00, 0x00};
@@ -760,5 +782,113 @@ TEST_CASE("CPU performs the sampled bus action between the third and fourth dots
 
     DotObservation observation{&cpu};
     REQUIRE(cpu.step_m_cycle(observe_write_phase, &observation));
-    REQUIRE(observation.values == std::array<uint8_t, 4>{0x00, 0x00, 0x00, 0xA5});
+    REQUIRE(observation.values == std::array<uint8_t, 4>{0x00, 0x00, 0x00, 0x00});
+}
+
+TEST_CASE("CPU commits an IF write one dot after its bus phase")
+{
+    auto rom = make_cpu_rom();
+    rom[0x0200] = 0xE0; // LDH (a8),A
+    rom[0x0201] = 0x0F;
+    CpuBusFixture fixture(std::move(rom));
+    fixture.cpu.pc = 0x0200;
+    fixture.cpu.a = 0x00;
+    fixture.interrupts.write_if(0x1F);
+
+    REQUIRE(fixture.cpu.step_m_cycle()); // Opcode fetch.
+    REQUIRE(fixture.cpu.step_m_cycle()); // Immediate address fetch.
+
+    struct IfObservation {
+        InterruptController& interrupts;
+        std::array<uint8_t, 4> values{};
+        int dots = 0;
+    } observation{fixture.interrupts};
+
+    const auto observe_if = [](void* context) {
+        auto& observation = *static_cast<IfObservation*>(context);
+        observation.values[observation.dots++] = observation.interrupts.read_if();
+    };
+
+    REQUIRE(fixture.cpu.step_m_cycle(observe_if, &observation));
+    REQUIRE(observation.values == std::array<uint8_t, 4>{0xFF, 0xFF, 0xFF, 0xFF});
+
+    observation.dots = 0;
+    REQUIRE(fixture.cpu.step_m_cycle(observe_if, &observation));
+    REQUIRE(observation.values == std::array<uint8_t, 4>{0xFF, 0xE0, 0xE0, 0xE0});
+}
+
+TEST_CASE("CPU schedules DMG palette writes around the normal write phase")
+{
+    auto rom = make_cpu_rom();
+    rom[0x0200] = 0xE0; // LDH (a8),A
+    rom[0x0201] = 0x47;
+    CpuBusFixture fixture(std::move(rom));
+    fixture.cpu.pc = 0x0200;
+    fixture.cpu.a = 0xA0;
+    fixture.ppu.write(0xFF47, 0x12);
+
+    const auto tick = [](void*) {};
+    REQUIRE(fixture.cpu.step_m_cycle(tick, nullptr)); // Opcode fetch.
+    REQUIRE(fixture.cpu.step_m_cycle(tick, nullptr)); // Immediate address fetch.
+
+    struct PaletteObservation {
+        PPU& ppu;
+        std::array<uint8_t, 4> values{};
+        int dots = 0;
+    } observation{fixture.ppu};
+
+    const auto observe_palette = [](void* context) {
+        auto& observation = *static_cast<PaletteObservation*>(context);
+        observation.values[observation.dots++] = observation.ppu.read(0xFF47);
+    };
+
+    REQUIRE(fixture.cpu.step_m_cycle(observe_palette, &observation));
+    REQUIRE(observation.values == std::array<uint8_t, 4>{0x12, 0x12, 0xB2, 0xA0});
+}
+
+TEST_CASE("CPU schedules an HL store to SCX before its normal write phase")
+{
+    auto rom = make_cpu_rom();
+    rom[0x0200] = 0x77; // LD (HL),A
+    CpuBusFixture fixture(std::move(rom));
+    fixture.cpu.pc = 0x0200;
+    fixture.cpu.set_hl(0xFF43);
+    fixture.cpu.a = 0x5A;
+
+    const auto tick = [](void*) {};
+    REQUIRE(fixture.cpu.step_m_cycle(tick, nullptr)); // Opcode fetch.
+
+    struct ScxObservation {
+        PPU& ppu;
+        std::array<uint8_t, 4> values{};
+        int dots = 0;
+    } observation{fixture.ppu};
+
+    const auto observe_scx = [](void* context) {
+        auto& observation = *static_cast<ScxObservation*>(context);
+        observation.values[observation.dots++] = observation.ppu.read(0xFF43);
+    };
+
+    REQUIRE(fixture.cpu.step_m_cycle(observe_scx, &observation));
+    REQUIRE(observation.values == std::array<uint8_t, 4>{0x00, 0x00, 0x5A, 0x5A});
+}
+
+TEST_CASE("CPU exposes the DMG STAT write glitch for one dot")
+{
+    auto rom = make_cpu_rom();
+    rom[0x0200] = 0xE0; // LDH (a8),A
+    rom[0x0201] = 0x41;
+    CpuBusFixture fixture(std::move(rom));
+    fixture.cpu.pc = 0x0200;
+    fixture.cpu.a = 0x00;
+    fixture.ppu.write(0xFF40, 0x80);
+
+    const auto tick = [](void*) {};
+    REQUIRE(fixture.cpu.step_m_cycle(tick, nullptr)); // Opcode fetch.
+    REQUIRE(fixture.cpu.step_m_cycle(tick, nullptr)); // Immediate address fetch.
+    REQUIRE(fixture.cpu.step_m_cycle(tick, nullptr)); // STAT write.
+    REQUIRE((fixture.ppu.read(0xFF41) & 0x78) == 0x78);
+
+    fixture.ppu.tick_dots(1);
+    REQUIRE((fixture.ppu.read(0xFF41) & 0x78) == 0x00);
 }

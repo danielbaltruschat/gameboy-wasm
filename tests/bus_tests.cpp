@@ -132,6 +132,19 @@ TEST_CASE("Unmapped cartridge RAM reads the external bus latch")
     REQUIRE(fixture.bus.read(0xA000) == 0x5A);
 }
 
+TEST_CASE("Disabled mapper RAM drives FF instead of exposing the bus latch")
+{
+    BusFixture fixture;
+    auto rom = make_rom();
+    rom[0x0147] = 0x03;
+    rom[0x0149] = 0x02;
+    fixture.cartridge.load_rom(rom);
+
+    fixture.bus.write(0xC000, 0x5A);
+
+    REQUIRE(fixture.bus.read(0xA000) == 0xFF);
+}
+
 TEST_CASE("Bus reset stops OAM DMA and restores the external bus latch")
 {
     BusFixture fixture;

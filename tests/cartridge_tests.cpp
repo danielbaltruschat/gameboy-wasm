@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "cartridge.h"
+#include "dmg_clock.h"
 
 namespace {
 
@@ -335,6 +336,33 @@ TEST_CASE("MBC3 switches ROM and external RAM banks")
     REQUIRE(cartridge.read(0xA000) == 0x22);
 }
 
+TEST_CASE("MBC30 selects all eight ROM bank bits")
+{
+    Cartridge cartridge(make_rom(256, 0x11, 0x07));
+
+    cartridge.write(0x2000, 0x80);
+    REQUIRE(cartridge.read(0x4000) == 0x80);
+
+    cartridge.write(0x2000, 0xFF);
+    REQUIRE(cartridge.read(0x4000) == 0xFF);
+}
+
+TEST_CASE("MBC30 selects eight RAM banks alongside the RTC")
+{
+    Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x05));
+
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0x4000, 0x07);
+    cartridge.write(0xA000, 0x77);
+    cartridge.write(0x4000, 0x03);
+    cartridge.write(0xA000, 0x33);
+
+    cartridge.write(0x4000, 0x07);
+    REQUIRE(cartridge.read(0xA000) == 0x77);
+    cartridge.write(0x4000, 0x03);
+    REQUIRE(cartridge.read(0xA000) == 0x33);
+}
+
 TEST_CASE("RTC MBC3 leaves RAM selections four through seven unmapped")
 {
     Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x03));
@@ -413,6 +441,54 @@ TEST_CASE("MBC3 RTC rolls over its day counter and sets carry")
     REQUIRE(cartridge.read(0xA000) == 0);
     cartridge.write(0x4000, 0x0C);
     REQUIRE((cartridge.read(0xA000) & 0x81) == 0x80);
+}
+
+TEST_CASE("MBC3 RTC invalid counter overflow does not carry")
+{
+    Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x03));
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0x4000, 0x08);
+    cartridge.write(0xA000, 63);
+    cartridge.write(0x4000, 0x09);
+    cartridge.write(0xA000, 10);
+
+    cartridge.tick_rtc_seconds(1);
+    cartridge.write(0x6000, 0x00);
+    cartridge.write(0x6000, 0x01);
+
+    cartridge.write(0x4000, 0x08);
+    REQUIRE(cartridge.read(0xA000) == 0);
+    cartridge.write(0x4000, 0x09);
+    REQUIRE(cartridge.read(0xA000) == 10);
+}
+
+TEST_CASE("MBC3 RTC seconds writes reset only the sub-second phase")
+{
+    Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x03));
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0x4000, 0x08);
+    cartridge.write(0xA000, 10);
+
+    cartridge.tick_rtc_dots(dmg::dot_clock_hz / 2);
+    cartridge.write(0x4000, 0x09);
+    cartridge.write(0xA000, 20);
+    cartridge.tick_rtc_dots(dmg::dot_clock_hz / 2);
+
+    cartridge.write(0x6000, 0x00);
+    cartridge.write(0x6000, 0x01);
+    cartridge.write(0x4000, 0x08);
+    REQUIRE(cartridge.read(0xA000) == 11);
+
+    cartridge.write(0xA000, 30);
+    cartridge.tick_rtc_dots(dmg::dot_clock_hz - 1);
+    cartridge.write(0x6000, 0x00);
+    cartridge.write(0x6000, 0x01);
+    REQUIRE(cartridge.read(0xA000) == 30);
+
+    cartridge.tick_rtc_dots(1);
+    cartridge.write(0x6000, 0x00);
+    cartridge.write(0x6000, 0x01);
+    REQUIRE(cartridge.read(0xA000) == 31);
 }
 
 TEST_CASE("MBC3 RTC does not advance while halted")

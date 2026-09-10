@@ -35,6 +35,7 @@ private:
     int index = 0;             // 0..159
     int dot_counter = 0;       // copies every 4 dots
     int start_dots_remaining = 0;
+    int completion_dots_remaining = 0;
     int pending_copies = 0; // How many bytes to copy that are ready but the bus has not yet performed
 
     void begin_pending_transfer();

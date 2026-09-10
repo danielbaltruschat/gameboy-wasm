@@ -288,7 +288,7 @@ TEST_CASE("Joypad keeps both groups connected during the DMG selection delay")
     REQUIRE((joypad.read() & 0x30) == 0x10);
     REQUIRE((joypad.read() & 0x01) == 0x00);
 
-    joypad.tick_dots(47);
+    joypad.tick_dots(23);
     REQUIRE((joypad.read() & 0x01) == 0x00);
 
     joypad.tick_dots(1);
@@ -306,7 +306,7 @@ TEST_CASE("Joypad uses the shorter DMG delay when switching to the d-pad")
     joypad.set_button(JoypadButton::A, true);
 
     joypad.write(0x20);
-    joypad.tick_dots(23);
+    joypad.tick_dots(11);
     REQUIRE((joypad.read() & 0x01) == 0x00);
 
     joypad.tick_dots(1);

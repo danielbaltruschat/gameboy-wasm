@@ -35,6 +35,7 @@ void CPU::reset()
     ime_enable_pending = false;
     ime_promotion_blocked = false;
     halted = false;
+    just_halted = false;
     stopped = false;
     halt_bug = false;
     locked_up = false;
@@ -52,6 +53,10 @@ void CPU::reset()
     operand16 = 0;
     interrupt_vector = 0;
     stop_wakeup_cycles_remaining = 0;
+    scheduling_bus_writes = false;
+    scheduled_io_write_addresses = {};
+    scheduled_io_write_count = 0;
+    timed_writes = {};
 }
 
 bool CPU::step_m_cycle()
@@ -76,19 +81,52 @@ bool CPU::step_m_cycle(DotCallback tick_dot, void* context)
         stopped = false;
     }
 
-    // External reads are sampled at T4R. With whole-dot peripherals, the bus
-    // action therefore occurs after three dots and before the fourth.
-    if (tick_dot != nullptr) {
-        tick_dot(context);
-        tick_dot(context);
-        tick_dot(context);
+    if (halted) {
+        const bool promote_ime = ime_enable_pending;
+        ime_enable_pending = false;
+        ime_promotion_blocked = false;
+
+        const int dots_before_interrupt_sample = just_halted ? 0 : 2;
+        for (int dot = 0; dot < dots_before_interrupt_sample; ++dot) {
+            tick_cpu_dot(tick_dot, context);
+        }
+
+        const bool pending = interrupt_pending();
+
+        for (int dot = dots_before_interrupt_sample; dot < 4; ++dot) {
+            tick_cpu_dot(tick_dot, context);
+        }
+        just_halted = false;
+
+        if (promote_ime && !ime_promotion_blocked) {
+            ime = true;
+        }
+
+        if (pending) {
+            halted = false;
+            if (ime) {
+                start_interrupt();
+                // The interrupt's dummy M-cycle begins at the HALT wake
+                // boundary, rather than one M-cycle later.
+                execute_interrupt_m_cycle();
+            } else {
+                // The resumed instruction's fetch begins at this wake
+                // boundary, following the halted M-cycle's four dots.
+                execute_cpu_m_cycle();
+            }
+        }
+        return true;
+    }
+
+    // A CPU bus access is sampled after the M-cycle's four dots. Timed writes
+    // from the preceding access are committed as those dots elapse.
+    scheduling_bus_writes = tick_dot != nullptr;
+    for (int dot = 0; dot < 4; ++dot) {
+        tick_cpu_dot(tick_dot, context);
     }
 
     execute_cpu_m_cycle();
-
-    if (tick_dot != nullptr) {
-        tick_dot(context);
-    }
+    scheduling_bus_writes = false;
     return true;
 }
 
@@ -116,22 +154,7 @@ void CPU::execute_cpu_m_cycle()
     } else if (servicing_interrupt) {
         execute_interrupt_m_cycle();
     } else {
-        if (halted) {
-            if (!interrupt_pending()) {
-                if (promote_ime && !ime_promotion_blocked) {
-                    ime = true;
-                }
-                return;
-            }
-
-            halted = false;
-            if (ime) {
-                start_interrupt();
-                execute_interrupt_m_cycle();
-            } else {
-                fetch_opcode();
-            }
-        } else if (at_instruction_boundary && ime && interrupt_pending()) {
+        if (at_instruction_boundary && ime && interrupt_pending()) {
             start_interrupt();
             execute_interrupt_m_cycle();
         } else if (at_instruction_boundary) {
@@ -181,6 +204,7 @@ void CPU::execute_fetched_opcode()
                 halt_bug = true;
             } else {
                 halted = true;
+                just_halted = true;
             }
             finish_instruction();
             return;
@@ -191,6 +215,8 @@ void CPU::execute_fetched_opcode()
         if (destination != 6 && source != 6) {
             write_register(destination, read_register(source));
             finish_instruction();
+        } else if (destination == 6) {
+            schedule_dmg_io_write(hl(), read_register(source), 4);
         }
         return;
     }
@@ -286,6 +312,19 @@ void CPU::execute_fetched_opcode()
                                  (flag_c() ? 0 : flag_c_mask));
         finish_instruction();
         return;
+    case 0x02:
+        schedule_dmg_io_write(bc(), a, 4);
+        return;
+    case 0x12:
+        schedule_dmg_io_write(de(), a, 4);
+        return;
+    case 0x22:
+    case 0x32:
+        schedule_dmg_io_write(hl(), a, 4);
+        return;
+    case 0xE2:
+        schedule_dmg_io_write(static_cast<uint16_t>(0xFF00 | c), a, 4);
+        return;
     case 0xE9:
         pc = hl();
         finish_instruction();
@@ -338,6 +377,7 @@ void CPU::execute_instruction_m_cycle()
         if (instruction_m_cycle == 1) {
             operand8 = read8(hl());
             operand8 = opcode == 0x34 ? inc8(operand8) : dec8(operand8);
+            schedule_dmg_io_write(hl(), operand8, 4);
             instruction_m_cycle = 2;
         } else {
             write8(hl(), operand8);
@@ -351,6 +391,7 @@ void CPU::execute_instruction_m_cycle()
         if (instruction_m_cycle == 1) {
             operand8 = fetch8();
             if (reg == 6) {
+                schedule_dmg_io_write(hl(), operand8, 4);
                 instruction_m_cycle = 2;
             } else {
                 write_register(reg, operand8);
@@ -446,6 +487,9 @@ void CPU::execute_instruction_m_cycle()
             instruction_m_cycle = 2;
         } else if (instruction_m_cycle == 2) {
             operand16 |= static_cast<uint16_t>(fetch8()) << 8;
+            schedule_dmg_io_write(operand16, static_cast<uint8_t>(sp), 4);
+            schedule_dmg_io_write(static_cast<uint16_t>(operand16 + 1),
+                                  static_cast<uint8_t>(sp >> 8), 8);
             instruction_m_cycle = 3;
         } else if (instruction_m_cycle == 3) {
             write8(operand16, static_cast<uint8_t>(sp));
@@ -516,8 +560,11 @@ void CPU::execute_instruction_m_cycle()
         } else if (instruction_m_cycle == 3) {
             internal_cycle(sp);
             --sp;
+            schedule_dmg_io_write(sp, static_cast<uint8_t>(pc >> 8), 4);
             instruction_m_cycle = 4;
         } else if (instruction_m_cycle == 4) {
+            schedule_dmg_io_write(static_cast<uint16_t>(sp - 1),
+                                  static_cast<uint8_t>(pc), 4);
             write8(sp, static_cast<uint8_t>(pc >> 8));
             --sp;
             instruction_m_cycle = 5;
@@ -589,8 +636,11 @@ void CPU::execute_instruction_m_cycle()
             operand16 = read_stack_pair((opcode >> 4) & 0x03);
             internal_cycle(sp);
             --sp;
+            schedule_dmg_io_write(sp, static_cast<uint8_t>(operand16 >> 8), 4);
             instruction_m_cycle = 2;
         } else if (instruction_m_cycle == 2) {
+            schedule_dmg_io_write(static_cast<uint16_t>(sp - 1),
+                                  static_cast<uint8_t>(operand16), 4);
             write8(sp, static_cast<uint8_t>(operand16 >> 8));
             --sp;
             instruction_m_cycle = 3;
@@ -610,8 +660,11 @@ void CPU::execute_instruction_m_cycle()
         if (instruction_m_cycle == 1) {
             internal_cycle(sp);
             --sp;
+            schedule_dmg_io_write(sp, static_cast<uint8_t>(pc >> 8), 4);
             instruction_m_cycle = 2;
         } else if (instruction_m_cycle == 2) {
+            schedule_dmg_io_write(static_cast<uint16_t>(sp - 1),
+                                  static_cast<uint8_t>(pc), 4);
             write8(sp, static_cast<uint8_t>(pc >> 8));
             --sp;
             instruction_m_cycle = 3;
@@ -636,6 +689,10 @@ void CPU::execute_instruction_m_cycle()
     case 0xF0:
         if (instruction_m_cycle == 1) {
             operand8 = fetch8();
+            if (opcode == 0xE0) {
+                const uint16_t address = static_cast<uint16_t>(0xFF00 | operand8);
+                schedule_dmg_io_write(address, a, 4);
+            }
             instruction_m_cycle = 2;
         } else {
             const uint16_t address = static_cast<uint16_t>(0xFF00 | operand8);
@@ -662,6 +719,9 @@ void CPU::execute_instruction_m_cycle()
             instruction_m_cycle = 2;
         } else if (instruction_m_cycle == 2) {
             operand16 |= static_cast<uint16_t>(fetch8()) << 8;
+            if (opcode == 0xEA) {
+                schedule_dmg_io_write(operand16, a, 4);
+            }
             instruction_m_cycle = 3;
         } else {
             if (opcode == 0xEA) {
@@ -734,6 +794,7 @@ void CPU::execute_cb_m_cycle()
         if ((current_cb_opcode >> 6) == 1) {
             finish_instruction();
         } else {
+            schedule_dmg_io_write(hl(), temporary8, 4);
             instruction_m_cycle = 3;
         }
         return;
@@ -748,6 +809,7 @@ void CPU::start_interrupt()
     ime = false;
     ime_enable_pending = false;
     halted = false;
+    just_halted = false;
     halt_bug = false;
     servicing_interrupt = true;
     at_instruction_boundary = false;
@@ -767,9 +829,12 @@ void CPU::execute_interrupt_m_cycle()
     case 1:
         internal_cycle(sp);
         --sp;
+        schedule_dmg_io_write(sp, static_cast<uint8_t>(pc >> 8), 4);
         interrupt_m_cycle = 2;
         return;
     case 2:
+        schedule_dmg_io_write(static_cast<uint16_t>(sp - 1),
+                              static_cast<uint8_t>(pc), 4);
         write8(sp, static_cast<uint8_t>(pc >> 8));
         --sp;
         interrupt_m_cycle = 3;
@@ -872,6 +937,39 @@ void CPU::write8(uint16_t addr, uint8_t value)
         testMemory[addr % testMemory.size()] = value;
         return;
     }
+
+    for (uint8_t index = 0; index < scheduled_io_write_count; ++index) {
+        if (addr != scheduled_io_write_addresses[index]) {
+            continue;
+        }
+
+        for (; index + 1 < scheduled_io_write_count; ++index) {
+            scheduled_io_write_addresses[index] =
+                scheduled_io_write_addresses[index + 1];
+        }
+        --scheduled_io_write_count;
+        return;
+    }
+
+    if (scheduling_bus_writes && addr == 0xFF41) {
+        assert(bus != nullptr);
+        bus->write_cpu_stat(value);
+        return;
+    }
+
+    // On a DMG, the CPU commits an IF write one dot after its bus phase. The
+    // next CPU bus phase remains on its normal M-cycle boundary.
+    if (scheduling_bus_writes && addr == 0xFF0F) {
+        schedule_write(addr, value, 1);
+        return;
+    }
+
+    write8_now(addr, value);
+}
+
+void CPU::write8_now(uint16_t addr, uint8_t value)
+{
+    assert(!isTest);
     assert(bus != nullptr);
     bus->write(addr, value);
 }
@@ -883,6 +981,87 @@ void CPU::internal_cycle(uint16_t addr)
     }
     assert(bus != nullptr);
     bus->internal_cycle(addr);
+}
+
+void CPU::schedule_dmg_io_write(uint16_t addr, uint8_t value,
+                                uint8_t dots_until_normal_write)
+{
+    if (!scheduling_bus_writes || dots_until_normal_write < 2) {
+        return;
+    }
+
+    switch (addr) {
+    case 0xFF40: {
+        const uint8_t old_value = read8(addr);
+        schedule_write(addr, static_cast<uint8_t>(old_value | (value & 0x01)),
+                       static_cast<uint8_t>(dots_until_normal_write - 2));
+        schedule_write(addr, value,
+                       static_cast<uint8_t>(dots_until_normal_write - 1));
+        break;
+    }
+    case 0xFF42:
+        // SCY is sampled one dot before an ordinary CPU write completes.
+        schedule_write(addr, value,
+                       static_cast<uint8_t>(dots_until_normal_write - 1));
+        break;
+    case 0xFF43:
+        // SCX is sampled two dots before an ordinary CPU write completes.
+        schedule_write(addr, value,
+                       static_cast<uint8_t>(dots_until_normal_write - 2));
+        break;
+    case 0xFF47:
+    case 0xFF48:
+    case 0xFF49: {
+        const uint8_t old_value = read8(addr);
+        schedule_write(addr, static_cast<uint8_t>(old_value | value),
+                       static_cast<uint8_t>(dots_until_normal_write - 2));
+        schedule_write(addr, value,
+                       static_cast<uint8_t>(dots_until_normal_write - 1));
+        break;
+    }
+    default:
+        return;
+    }
+
+    assert(scheduled_io_write_count < scheduled_io_write_addresses.size());
+    scheduled_io_write_addresses[scheduled_io_write_count++] = addr;
+}
+
+void CPU::schedule_write(uint16_t addr, uint8_t value, uint8_t dots_until_write)
+{
+    assert(dots_until_write > 0);
+
+    for (TimedWrite& timed_write : timed_writes) {
+        if (timed_write.dots_remaining != 0) {
+            continue;
+        }
+
+        timed_write = TimedWrite{addr, value, dots_until_write};
+        return;
+    }
+
+    assert(false && "too many timed CPU bus writes");
+}
+
+void CPU::tick_scheduled_writes()
+{
+    for (TimedWrite& timed_write : timed_writes) {
+        if (timed_write.dots_remaining == 0) {
+            continue;
+        }
+
+        if (--timed_write.dots_remaining == 0) {
+            write8_now(timed_write.address, timed_write.value);
+        }
+    }
+}
+
+void CPU::tick_cpu_dot(DotCallback tick_dot, void* context)
+{
+    if (tick_dot != nullptr) {
+        tick_dot(context);
+    }
+    tick_scheduled_writes();
 }
 
 uint8_t CPU::read_register(int index) const

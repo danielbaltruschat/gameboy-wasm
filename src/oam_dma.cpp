@@ -14,6 +14,7 @@ void OamDma::reset() {
     index = 0;
     dot_counter = 0;
     start_dots_remaining = 0;
+    completion_dots_remaining = 0;
     pending_copies = 0;
 }
 
@@ -71,6 +72,7 @@ void OamDma::start(uint8_t source_high_byte) {
     if (!active) {
         index = 0;
         dot_counter = 0;
+        completion_dots_remaining = 0;
         pending_copies = 0;
     }
 }
@@ -90,9 +92,9 @@ void OamDma::acknowledge_copy() {
     }
 
     if (index >= 160) {
-        active = false;
         pending_copies = 0;
         dot_counter = 0;
+        completion_dots_remaining = 4;
     }
 }
 
@@ -100,7 +102,12 @@ void OamDma::tick_dots(int dots) {
     if (dots <= 0) return;
 
     for (int dot = 0; dot < dots; ++dot) {
-        if (active) {
+        if (completion_dots_remaining > 0) {
+            completion_dots_remaining--;
+            if (completion_dots_remaining == 0) {
+                active = false;
+            }
+        } else if (active) {
             dot_counter++;
             if (dot_counter == 4 && (index + pending_copies) < 160) {
                 dot_counter = 0;
@@ -131,6 +138,7 @@ void OamDma::begin_pending_transfer() {
     source_base = pending_source_base;
     index = 0;
     dot_counter = 0;
+    completion_dots_remaining = 0;
     pending_copies = 0;
     restart_warmup = was_active;
 }

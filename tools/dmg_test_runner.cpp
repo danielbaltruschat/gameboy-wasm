@@ -34,9 +34,13 @@ struct Machine {
     uint64_t total_dots = 0;
     uint64_t frames = 0;
 
-    void reset(std::span<const uint8_t> rom, bool post_boot)
+    void reset(std::span<const uint8_t> rom, std::span<const uint8_t> boot_rom_image,
+               bool post_boot)
     {
         cartridge.load_rom(rom);
+        if (!boot_rom_image.empty()) {
+            boot_rom.load_dmg(boot_rom_image);
+        }
         interrupts.reset();
         boot_rom.reset();
         memory.reset();
@@ -203,7 +207,7 @@ int main(int argc, char** argv)
 {
     if (argc < 2) {
         std::cerr << "usage: dmg_test_runner ROM [--frames N] [--max-seconds N]"
-                     " [--ppm PATH] [--raw-reset] [--trace-pc ADDRESS]"
+                     " [--ppm PATH] [--boot-rom PATH] [--raw-reset] [--trace-pc ADDRESS]"
                      " [--strict-breakpoint]"
                      " [--tap BUTTON:FRAME] [--hold BUTTON:START:END]\n";
         return 2;
@@ -211,6 +215,7 @@ int main(int argc, char** argv)
 
     std::filesystem::path rom_path = argv[1];
     std::filesystem::path ppm_path;
+    std::filesystem::path boot_rom_path;
     uint64_t target_frames = 0;
     uint64_t max_seconds = 120;
     bool post_boot = true;
@@ -226,6 +231,9 @@ int main(int argc, char** argv)
             max_seconds = std::stoull(argv[++arg]);
         } else if (option == "--ppm" && arg + 1 < argc) {
             ppm_path = argv[++arg];
+        } else if (option == "--boot-rom" && arg + 1 < argc) {
+            boot_rom_path = argv[++arg];
+            post_boot = false;
         } else if (option == "--raw-reset") {
             post_boot = false;
         } else if (option == "--strict-breakpoint") {
@@ -274,8 +282,14 @@ int main(int argc, char** argv)
 
     try {
         const std::vector<uint8_t> rom = read_rom(rom_path);
+        const std::vector<uint8_t> boot_rom_image = boot_rom_path.empty()
+            ? std::vector<uint8_t>{}
+            : read_rom(boot_rom_path);
+        if (!boot_rom_image.empty() && boot_rom_image.size() != BootRom::dmg_size) {
+            throw std::runtime_error("DMG boot ROM must be exactly 256 bytes");
+        }
         Machine machine;
-        machine.reset(rom, post_boot);
+        machine.reset(rom, boot_rom_image, post_boot);
         const uint64_t max_dots = max_seconds * dmg::dot_clock_hz;
         std::sort(
             button_events.begin(),

@@ -163,7 +163,7 @@ TEST_CASE("OAM DMA acknowledge without pending copy is a no-op")
     REQUIRE(dma.pending_copy_count() == 0);
 }
 
-TEST_CASE("OAM DMA stops after 160 acknowledged copies")
+TEST_CASE("OAM DMA releases the bus one M-cycle after the final copy")
 {
     OamDma dma;
 
@@ -184,9 +184,15 @@ TEST_CASE("OAM DMA stops after 160 acknowledged copies")
 
     dma.acknowledge_copy();
 
-    REQUIRE_FALSE(dma.is_active());
+    REQUIRE(dma.is_active());
     REQUIRE_FALSE(dma.copy_pending());
     REQUIRE(dma.pending_copy_count() == 0);
+
+    dma.tick_dots(3);
+    REQUIRE(dma.is_active());
+
+    dma.tick_dots(1);
+    REQUIRE_FALSE(dma.is_active());
 }
 
 TEST_CASE("OAM DMA does not schedule beyond 160 bytes")

@@ -50,7 +50,6 @@ private:
     CPU cpu;
 
     uint64_t total_dots = 0;
-    uint32_t rtc_dots = 0;
 
     static void tick_cpu_dot(void* context);
     void tick_dot();

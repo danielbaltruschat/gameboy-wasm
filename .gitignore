@@ -4,3 +4,4 @@ __cmake_systeminformation/CMakeFiles/
 vcpkg_installed/
 build-vcpkg/
 compile_commands.json
+.agents/skills/

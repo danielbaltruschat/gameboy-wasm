@@ -41,6 +41,7 @@ struct Mbc2State {
 };
 
 struct Mbc3Rtc {
+    uint32_t subsecond_dots = 0;
     uint8_t seconds = 0;
     uint8_t minutes = 0;
     uint8_t hours = 0;
@@ -70,6 +71,7 @@ public:
 
     void load_rom(std::span<const uint8_t> data);
     void reset_mapper();
+    void tick_rtc_dots(uint32_t dots);
     void tick_rtc_seconds(uint32_t seconds);
 
     uint8_t read(uint16_t address) const;
@@ -90,6 +92,7 @@ private:
     uint16_t rom_bank = 1;
     uint8_t ram_bank = 0;
     uint8_t rtc_register_select = 0;
+    bool mbc30 = false;
 
     Mbc1State mbc1;
     Mbc2State mbc2;

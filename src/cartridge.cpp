@@ -1,4 +1,5 @@
 #include "cartridge.h"
+#include "dmg_clock.h"
 
 #include <algorithm>
 #include <cassert>
@@ -190,6 +191,9 @@ void Cartridge::configure_mapper() {
         capabilities.hasMbc1MulticartLayout = has_mbc1_multicart_layout(rom);
     }
 
+    mbc30 = capabilities.mapper == MapperType::Mbc3 &&
+        (rom.size() > 2 * 1024 * 1024 || header.ramSizeBytes > 32 * 1024);
+
     if (capabilities.hasRam && capabilities.mapper != MapperType::Mbc2) {
         ram.assign(header.ramSizeBytes, 0);
     } else {
@@ -278,7 +282,7 @@ void Cartridge::write(uint16_t address, uint8_t value) {
         if (address <= 0x1FFF) {
             ram_enabled = (value & 0x0F) == 0x0A;
         } else if (address <= 0x3FFF) {
-            rom_bank = value & 0x7F;
+            rom_bank = value & (mbc30 ? 0xFF : 0x7F);
             if (rom_bank == 0) {
                 rom_bank = 1;
             }
@@ -395,7 +399,7 @@ std::size_t Cartridge::effective_ram_offset(uint16_t address) const {
         }
         break;
     case MapperType::Mbc3:
-        bank = ram_bank & 0x03;
+        bank = ram_bank & (mbc30 ? 0x07 : 0x03);
         break;
     case MapperType::Mbc5:
         bank = mbc5.ram_bank;
@@ -420,12 +424,14 @@ std::optional<uint8_t> Cartridge::read_external_ram(uint16_t address) const {
         return ram[effective_ram_offset(address)];
     case MapperType::Mbc2:
         if (!ram_enabled) {
-            return std::nullopt;
+            return 0xFF;
         }
         return 0xF0 | (mbc2.ram[(address - 0xA000) & 0x01FF] & 0x0F);
     case MapperType::Mbc3:
         if (!ram_enabled) {
-            return std::nullopt;
+            return capabilities.hasRam || capabilities.hasTimer
+                ? std::optional<uint8_t>{0xFF}
+                : std::nullopt;
         }
         if (rtc_register_select >= 0x08 && rtc_register_select <= 0x0C) {
             return capabilities.hasTimer
@@ -435,13 +441,18 @@ std::optional<uint8_t> Cartridge::read_external_ram(uint16_t address) const {
         if (rtc_register_select > 0x07 || ram.empty()) {
             return std::nullopt;
         }
-        if (capabilities.hasTimer && rtc_register_select > 0x03) {
+        if (capabilities.hasTimer && !mbc30 && rtc_register_select > 0x03) {
             return 0xFF;
         }
         return ram[effective_ram_offset(address)];
     case MapperType::Mbc1:
     case MapperType::Mbc5:
-        if (!ram_enabled || ram.empty()) {
+        if (!ram_enabled) {
+            return capabilities.hasRam
+                ? std::optional<uint8_t>{0xFF}
+                : std::nullopt;
+        }
+        if (ram.empty()) {
             return std::nullopt;
         }
         return ram[effective_ram_offset(address)];
@@ -476,7 +487,7 @@ void Cartridge::write_external_ram(uint16_t address, uint8_t value) {
             }
         } else if (
             rtc_register_select <= 0x07 &&
-            (!capabilities.hasTimer || rtc_register_select <= 0x03) &&
+            (!capabilities.hasTimer || mbc30 || rtc_register_select <= 0x03) &&
             !ram.empty()
         ) {
             ram[effective_ram_offset(address)] = value;
@@ -517,6 +528,7 @@ void Cartridge::write_rtc_register(uint8_t value) {
     switch (rtc_register_select) {
     case 0x08:
         mbc3_rtc.seconds = value & 0x3F;
+        mbc3_rtc.subsecond_dots = 0;
         break;
     case 0x09:
         mbc3_rtc.minutes = value & 0x3F;
@@ -540,6 +552,21 @@ void Cartridge::write_rtc_register(uint8_t value) {
     }
 }
 
+void Cartridge::tick_rtc_dots(uint32_t dots) {
+    if (
+        capabilities.mapper != MapperType::Mbc3 ||
+        !capabilities.hasTimer ||
+        mbc3_rtc.halted ||
+        dots == 0
+    ) {
+        return;
+    }
+
+    const uint64_t total_dots = static_cast<uint64_t>(mbc3_rtc.subsecond_dots) + dots;
+    mbc3_rtc.subsecond_dots = total_dots % dmg::dot_clock_hz;
+    tick_rtc_seconds(total_dots / dmg::dot_clock_hz);
+}
+
 void Cartridge::tick_rtc_seconds(uint32_t seconds) {
     if (
         capabilities.mapper != MapperType::Mbc3 ||
@@ -550,18 +577,30 @@ void Cartridge::tick_rtc_seconds(uint32_t seconds) {
         return;
     }
 
-    uint64_t total = static_cast<uint64_t>(mbc3_rtc.seconds) + seconds;
-    mbc3_rtc.seconds = total % 60;
+    for (uint32_t tick = 0; tick < seconds; ++tick) {
+        if (mbc3_rtc.seconds != 59) {
+            mbc3_rtc.seconds = (mbc3_rtc.seconds + 1) & 0x3F;
+            continue;
+        }
+        mbc3_rtc.seconds = 0;
 
-    total = static_cast<uint64_t>(mbc3_rtc.minutes) + total / 60;
-    mbc3_rtc.minutes = total % 60;
+        if (mbc3_rtc.minutes != 59) {
+            mbc3_rtc.minutes = (mbc3_rtc.minutes + 1) & 0x3F;
+            continue;
+        }
+        mbc3_rtc.minutes = 0;
 
-    total = static_cast<uint64_t>(mbc3_rtc.hours) + total / 60;
-    mbc3_rtc.hours = total % 24;
+        if (mbc3_rtc.hours != 23) {
+            mbc3_rtc.hours = (mbc3_rtc.hours + 1) & 0x1F;
+            continue;
+        }
+        mbc3_rtc.hours = 0;
 
-    total = static_cast<uint64_t>(mbc3_rtc.days) + total / 24;
-    if (total > 0x01FF) {
-        mbc3_rtc.day_carry = true;
+        if (mbc3_rtc.days == 0x01FF) {
+            mbc3_rtc.days = 0;
+            mbc3_rtc.day_carry = true;
+        } else {
+            mbc3_rtc.days++;
+        }
     }
-    mbc3_rtc.days = total & 0x01FF;
 }

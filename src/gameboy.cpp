@@ -1,7 +1,5 @@
 #include "gameboy.h"
 
-#include "dmg_clock.h"
-
 GameBoy::GameBoy()
     : ppu(interrupts),
       timer(interrupts),
@@ -20,7 +18,6 @@ void GameBoy::load_boot_rom(std::span<const uint8_t> rom)
 void GameBoy::load_rom(std::span<const uint8_t> rom)
 {
     cartridge.load_rom(rom);
-    rtc_dots = 0;
 }
 
 void GameBoy::reset()
@@ -55,11 +52,7 @@ void GameBoy::tick_dot()
     joypad.tick_dots(1);
 
     ++total_dots;
-    ++rtc_dots;
-    if (rtc_dots == dmg::dot_clock_hz) {
-        rtc_dots = 0;
-        cartridge.tick_rtc_seconds(1);
-    }
+    cartridge.tick_rtc_dots(1);
 }
 
 int GameBoy::step_instruction()

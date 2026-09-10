@@ -62,7 +62,6 @@ void PPU::reset() {
     mode3_startup_dots = 0;
     pixel_position = -16;
     object_fetch_index = -1;
-    object_fetch_alignment_dots = 0;
     screen_x = 0;
     scanline = 0;
     oam_scan_index = 0;
@@ -79,21 +78,26 @@ void PPU::reset() {
     startup_line = false;
     oam_dma_active = false;
     object_fetch_aborted = false;
+    object_fetch_started_this_line = false;
+    oam_mode_interrupt_delay = 0;
+    oam_mode_interrupt_active = false;
+    hblank_mode_interrupt_delay = 0;
+    hblank_mode_interrupt_active = false;
     vram_read_blocked = false;
     vram_write_blocked = false;
     oam_read_blocked = false;
     oam_write_blocked = false;
 
     mode = Mode::HBlank;
+    stat_mode = Mode::HBlank;
+    pending_stat_mode = Mode::HBlank;
 
     fetcher = PixelFetcher{};
     bg_fifo = PixelFifo{};
     obj_fifo = PixelFifo{};
     line_objects.fill(ObjectCandidate{});
     line_object_fetched.fill(false);
-    considered_object_tiles.fill(0);
     line_object_count = 0;
-    considered_object_tile_count = 0;
     object_fetch_step = ObjectFetchStep::None;
     object_tile = 0;
     object_attributes = 0;
@@ -104,6 +108,7 @@ void PPU::reset() {
     stat_interrupt_line = false;
     pending_stat = 0;
     stat_write_dots_remaining = 0;
+    stat_mode_delay = 0;
     oam_dma_offset = 0;
     accessed_oam_row = -1;
 }
@@ -127,33 +132,93 @@ void PPU::tick_dot() {
     update_stat_write();
     dot_counter++;
 
-    if (scanline == 153) {
-        if (dot_counter == 6) {
-            ly = 0;
-            set_ly_for_comparison(153);
-        } else if (dot_counter == 8) {
-            set_ly_for_comparison(-1);
-        } else if (dot_counter == 12) {
-            set_ly_for_comparison(0);
+    bool stat_changed = false;
+
+    if (mode == Mode::OamScan) {
+        if (dot_counter == 3) {
+            ly = scanline;
+            set_ly_for_comparison(scanline == 0 ? 0 : -1, false);
+            oam_read_blocked = true;
+
+            // The first line after VBlank exposes mode 0 for three dots.
+            if (scanline == 0) {
+                stat_mode = Mode::HBlank;
+            }
+            stat_changed = true;
+        } else if (dot_counter == 4) {
+            oam_write_blocked = true;
+            set_ly_for_comparison(scanline, false);
+            if ((lcdc & 0x20) != 0 && scanline == wy) {
+                window_y_triggered = true;
+            }
+            stat_changed = true;
         }
-    } else if (dot_counter == 4 && ly_for_comparison < 0) {
-        set_ly_for_comparison(scanline);
+    } else if (scanline == 144 && mode == Mode::HBlank) {
+        if (dot_counter == 2) {
+            ly = scanline;
+        } else if (dot_counter == 4) {
+            set_ly_for_comparison(scanline);
+        } else if (dot_counter == 5) {
+            set_mode(Mode::VBlank);
+            set_access_blocking(false, false);
+            interrupts.request(Interrupt::VBlank);
+            frame_ready = true;
+            first_frame_blank = false;
+        }
+    } else if (mode == Mode::VBlank) {
+        if (scanline == 153) {
+            if (dot_counter == 2) {
+                ly = 153;
+            } else if (dot_counter == 4) {
+                set_ly_for_comparison(153);
+            } else if (dot_counter == 8) {
+                ly = 0;
+                set_ly_for_comparison(-1);
+            } else if (dot_counter == 12) {
+                set_ly_for_comparison(0);
+            }
+        } else {
+            if (dot_counter == 2) {
+                ly = scanline;
+            } else if (dot_counter == 4) {
+                set_ly_for_comparison(scanline);
+            }
+        }
+    }
+
+    if (stat_mode_delay > 0 && --stat_mode_delay == 0) {
+        stat_mode = pending_stat_mode;
+        stat_changed = true;
+    }
+
+    if (oam_mode_interrupt_delay > 0 && --oam_mode_interrupt_delay == 0) {
+        oam_mode_interrupt_active = true;
+        stat_changed = true;
+    }
+
+    if (hblank_mode_interrupt_delay > 0 && --hblank_mode_interrupt_delay == 0) {
+        hblank_mode_interrupt_active = true;
+        stat_changed = true;
+    }
+
+    if (stat_changed) {
+        update_stat_interrupt();
     }
 
     if (startup_line && mode == Mode::HBlank) {
-        if (dot_counter == 77) {
+        if (dot_counter == 78) {
             oam_write_blocked = true;
-        } else if (dot_counter == 79) {
+        } else if (dot_counter == 80) {
             set_mode(Mode::Drawing);
             set_access_blocking(true, true);
             begin_mode3();
         }
     } else if (mode == Mode::OamScan) {
-        if ((dot_counter & 0x01) == 0) {
+        if (dot_counter >= 6 && (dot_counter & 0x01) == 0) {
             scan_oam_entry();
         }
 
-        if (dot_counter == 80) {
+        if (dot_counter == 84) {
             set_mode(Mode::Drawing);
             set_access_blocking(true, true);
             begin_mode3();
@@ -170,28 +235,20 @@ void PPU::tick_dot() {
     line_dot_limit = 456;
     startup_line = false;
     scanline = static_cast<uint8_t>((scanline + 1) % 154);
-    ly = scanline;
-    set_ly_for_comparison(-1);
 
     if (scanline == 0) {
         window_line = 0;
         window_y_triggered = false;
         set_mode(Mode::OamScan);
-        set_access_blocking(false, true);
-        begin_scanline();
-    } else if (scanline == 144) {
-        set_mode(Mode::VBlank);
         set_access_blocking(false, false);
-        interrupts.request(Interrupt::VBlank);
-        frame_ready = true;
-        first_frame_blank = false;
+        begin_scanline();
     } else if (scanline < 144) {
         set_mode(Mode::OamScan);
-        set_access_blocking(false, true);
+        set_access_blocking(false, false);
         begin_scanline();
     } else {
-        set_mode(Mode::VBlank);
         set_access_blocking(false, false);
+        set_ly_for_comparison(-1);
     }
 }
 
@@ -227,7 +284,7 @@ bool PPU::window_enabled() const {
 }
 
 uint8_t PPU::stat_value() const {
-    const uint8_t mode_bits = lcd_enabled() ? static_cast<uint8_t>(mode) : 0;
+    const uint8_t mode_bits = lcd_enabled() ? static_cast<uint8_t>(stat_mode) : 0;
     const uint8_t coincidence_bit = coincidence_flag ? 0x04 : 0;
 
     return 0x80 | (stat & 0x78) | coincidence_bit | mode_bits;
@@ -314,19 +371,26 @@ void PPU::write(uint16_t addr, uint8_t value) {
                 stat = pending_stat;
                 stat_write_dots_remaining = 0;
                 framebuffer = Framebuffer{};
-                set_ly_for_comparison(0);
-                set_mode(Mode::HBlank);
+                ly_for_comparison = 0;
+                mode = Mode::HBlank;
+                stat_mode = Mode::HBlank;
+                pending_stat_mode = Mode::HBlank;
+                stat_mode_delay = 0;
                 set_access_blocking(false, false);
                 clear_fifos();
                 object_fetch_step = ObjectFetchStep::None;
                 object_fetch_index = -1;
                 object_fetch_aborted = false;
+                oam_mode_interrupt_delay = 0;
+                oam_mode_interrupt_active = false;
+                hblank_mode_interrupt_delay = 0;
+                hblank_mode_interrupt_active = false;
                 accessed_oam_row = -1;
             } else if (!was_enabled && lcd_enabled()) {
                 ly = 0;
                 scanline = 0;
                 dot_counter = 0;
-                line_dot_limit = 455;
+                line_dot_limit = 450;
                 window_line = 0;
                 scx_low = 0;
                 window_y_triggered = false;
@@ -365,7 +429,9 @@ void PPU::write(uint16_t addr, uint8_t value) {
             break;
         case 0xFF45:
             lyc = value;
-            set_ly_for_comparison(ly_for_comparison);
+            if (lcd_enabled()) {
+                set_ly_for_comparison(ly_for_comparison);
+            }
             break;
         case 0xFF47:
             bgp = value;
@@ -386,6 +452,19 @@ void PPU::write(uint16_t addr, uint8_t value) {
         default:
             break;
     }
+}
+
+void PPU::write_cpu_stat(uint8_t value) {
+    pending_stat = value & 0x78;
+    if (lcd_enabled()) {
+        // A DMG CPU write exposes all STAT interrupt selects for one dot.
+        stat = 0x78;
+        stat_write_dots_remaining = 1;
+    } else {
+        stat = pending_stat;
+        stat_write_dots_remaining = 0;
+    }
+    update_stat_interrupt();
 }
 
 void PPU::write_oam_dma(uint16_t offset, uint8_t value) {
@@ -439,26 +518,34 @@ void PPU::notify_oam_bus_access(uint16_t addr, BusAccessType access_type) {
 
 bool PPU::stat_interrupt_active(uint8_t interrupt_selects) const {
     const bool startup_hblank =
-        startup_line && mode == Mode::HBlank && dot_counter < 79;
+        startup_line && stat_mode == Mode::HBlank && dot_counter < 79;
 
     return
         lcd_enabled() &&
         (
             ((interrupt_selects & 0x40) != 0 && coincidence_flag) ||
-            ((interrupt_selects & 0x20) != 0 && mode == Mode::OamScan) ||
-            ((interrupt_selects & 0x10) != 0 && mode == Mode::VBlank) ||
+            (
+                (interrupt_selects & 0x20) != 0 &&
+                (
+                    (mode == Mode::OamScan && oam_mode_interrupt_active) ||
+                    (stat_mode == Mode::VBlank && scanline == 144)
+                )
+            ) ||
+            ((interrupt_selects & 0x10) != 0 && stat_mode == Mode::VBlank) ||
             (
                 (interrupt_selects & 0x08) != 0 &&
-                mode == Mode::HBlank &&
+                hblank_mode_interrupt_active &&
                 !startup_hblank
             )
         );
 }
 
-void PPU::set_ly_for_comparison(int value) {
+void PPU::set_ly_for_comparison(int value, bool update_interrupt) {
     ly_for_comparison = value;
     coincidence_flag = value >= 0 && value == lyc;
-    update_stat_interrupt();
+    if (update_interrupt) {
+        update_stat_interrupt();
+    }
 }
 
 void PPU::update_stat_interrupt() {
@@ -494,6 +581,31 @@ void PPU::set_mode(Mode next_mode) {
     assert(lcd_enabled() || next_mode == Mode::HBlank);
 
     mode = next_mode;
+    oam_mode_interrupt_active = false;
+    oam_mode_interrupt_delay = 0;
+    hblank_mode_interrupt_delay = 0;
+    hblank_mode_interrupt_active = false;
+    if (next_mode == Mode::OamScan) {
+        // Mode 2's interrupt source precedes the STAT mode bits by one dot,
+        // except on line zero after VBlank where both arrive on dot four.
+        oam_mode_interrupt_delay = scanline == 0 ? 4 : 3;
+        pending_stat_mode = next_mode;
+        stat_mode_delay = 4;
+        return;
+    }
+
+    if (next_mode == Mode::HBlank) {
+        stat_mode = next_mode;
+        pending_stat_mode = next_mode;
+        stat_mode_delay = 0;
+        hblank_mode_interrupt_delay = 1;
+        update_stat_interrupt();
+        return;
+    }
+
+    stat_mode = next_mode;
+    pending_stat_mode = next_mode;
+    stat_mode_delay = 0;
     update_stat_interrupt();
 }
 
@@ -504,21 +616,18 @@ void PPU::clear_fifos() {
 
 void PPU::begin_scanline() {
     assert(lcd_enabled());
-    assert(ly < 144);
+    assert(scanline < 144);
     assert(mode == Mode::OamScan);
 
     screen_x = 0;
     pixel_position = -16;
     mode3_startup_dots = 0;
     object_fetch_index = -1;
-    object_fetch_alignment_dots = 0;
     object_fetch_step = ObjectFetchStep::None;
     object_fetch_aborted = false;
+    object_fetch_started_this_line = false;
     oam_scan_index = 0;
     accessed_oam_row = 0;
-    if (ly == wy) {
-        window_y_triggered = true;
-    }
     window_triggered_this_line = false;
     window_active = false;
     wx_just_changed = false;
@@ -527,13 +636,11 @@ void PPU::begin_scanline() {
     clear_fifos();
     line_objects.fill(ObjectCandidate{});
     line_object_fetched.fill(false);
-    considered_object_tiles.fill(0);
     line_object_count = 0;
-    considered_object_tile_count = 0;
 }
 
 void PPU::scan_oam_entry() {
-    assert(ly < 144);
+    assert(scanline < 144);
     assert(oam_scan_index < 40);
 
     const int object_height = (lcdc & 0x04) != 0 ? 16 : 8;
@@ -543,8 +650,8 @@ void PPU::scan_oam_entry() {
 
     if (
         line_object_count < line_objects.size() &&
-        ly >= object_top &&
-        ly < object_top + object_height
+        scanline >= object_top &&
+        scanline < object_top + object_height
     ) {
         ObjectCandidate& object = line_objects[line_object_count++];
         object.y = object_y;
@@ -568,7 +675,6 @@ void PPU::begin_mode3() {
     scx_low = scx & 0x07;
     screen_x = 0;
     object_fetch_index = -1;
-    object_fetch_alignment_dots = 0;
     object_fetch_step = ObjectFetchStep::None;
     object_fetch_aborted = false;
     accessed_oam_row = -1;
@@ -629,14 +735,10 @@ void PPU::tick_mode3() {
 
     wx_just_changed = false;
 
-    if (tick_object_fetch()) {
-        return;
-    }
+    if (tick_object_fetch()) return;
 
     start_object_fetch();
-    if (tick_object_fetch()) {
-        return;
-    }
+    if (tick_object_fetch()) return;
 
     mix_and_push_pixel();
     advance_pixel_fetcher();
@@ -659,7 +761,7 @@ void PPU::advance_pixel_fetcher() {
             : ((lcdc & 0x08) != 0 ? 0x1C00 : 0x1800);
         const uint8_t pixel_y = fetcher.fetching_window
             ? window_line
-            : static_cast<uint8_t>(scy + ly);
+            : static_cast<uint8_t>(scy + scanline);
         uint8_t tile_x = 0;
 
         if (fetcher.fetching_window) {
@@ -685,7 +787,7 @@ void PPU::advance_pixel_fetcher() {
             : 0x1000 + static_cast<int8_t>(fetcher.tile_id) * 16;
         const uint8_t pixel_y = fetcher.fetching_window
             ? window_line
-            : static_cast<uint8_t>(scy + ly);
+            : static_cast<uint8_t>(scy + scanline);
         fetcher.tile_data_address = static_cast<uint16_t>(
             tile_base + (pixel_y & 0x07) * 2
         );
@@ -702,7 +804,7 @@ void PPU::advance_pixel_fetcher() {
             : 0x1000 + static_cast<int8_t>(fetcher.tile_id) * 16;
         const uint8_t pixel_y = fetcher.fetching_window
             ? window_line
-            : static_cast<uint8_t>(scy + ly);
+            : static_cast<uint8_t>(scy + scanline);
         fetcher.tile_data_address = static_cast<uint16_t>(
             tile_base + (pixel_y & 0x07) * 2 + 1
         );
@@ -873,52 +975,24 @@ void PPU::start_object_fetch() {
     }
 
     if (next_object >= 0) {
-        const ObjectCandidate& object = line_objects[next_object];
-        int alignment_dots = 5;
-
-        if (object.x != 0) {
-            const int object_left = static_cast<int>(object.x) - 8;
-            const int window_left = static_cast<int>(wx) - 7;
-            const bool over_window =
-                window_triggered_this_line && object_left >= window_left;
-            const int tile_coordinate = over_window
-                ? object_left - window_left
-                : object_left + scx;
-            const int tile_number = tile_coordinate >= 0
-                ? tile_coordinate / 8
-                : (tile_coordinate - 7) / 8;
-            const int tile_key = tile_number + (over_window ? 0x100 : 0);
-            bool tile_was_considered = false;
-
-            for (uint8_t index = 0; index < considered_object_tile_count; ++index) {
-                if (considered_object_tiles[index] == tile_key) {
-                    tile_was_considered = true;
-                    break;
-                }
-            }
-
-            if (tile_was_considered) {
-                alignment_dots = 0;
-            } else {
-                int pixel_in_tile = tile_coordinate % 8;
-                if (pixel_in_tile < 0) {
-                    pixel_in_tile += 8;
-                }
-                alignment_dots = 5 - pixel_in_tile;
-                if (alignment_dots < 0) {
-                    alignment_dots = 0;
-                }
-                considered_object_tiles[considered_object_tile_count++] = tile_key;
-            }
-        }
-
         line_object_fetched[next_object] = true;
+        object_fetch_started_this_line = true;
         object_fetch_index = next_object;
-        object_fetch_alignment_dots = alignment_dots;
-        object_fetch_step = alignment_dots == 0
-            ? ObjectFetchStep::OamFirst
-            : ObjectFetchStep::Align;
+        object_fetch_step = ObjectFetchStep::Align;
     }
+}
+
+bool PPU::object_fetch_remaining() const {
+    if (object_fetch_step != ObjectFetchStep::None) {
+        return true;
+    }
+
+    for (uint8_t index = 0; index < line_object_count; ++index) {
+        if (!line_object_fetched[index] && line_objects[index].x < 168) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool PPU::tick_object_fetch() {
@@ -941,14 +1015,14 @@ bool PPU::tick_object_fetch() {
 
     switch (object_fetch_step) {
     case ObjectFetchStep::Align:
-        assert(object_fetch_alignment_dots > 0);
-        advance_pixel_fetcher();
-        object_fetch_alignment_dots--;
-        if (object_fetch_alignment_dots == 0) {
-            object_fetch_step = ObjectFetchStep::OamFirst;
+        if (fetcher.step < 5 || bg_fifo.size == 0) {
+            advance_pixel_fetcher();
+            break;
         }
-        break;
+        object_fetch_step = ObjectFetchStep::OamFirst;
+        [[fallthrough]];
     case ObjectFetchStep::OamFirst: {
+        advance_pixel_fetcher();
         const uint16_t offset = static_cast<uint16_t>(object.oam_index) * 4;
         object_tile = read_oam_ppu(offset + 2);
         object_attributes = read_oam_ppu(offset + 3);
@@ -957,7 +1031,7 @@ bool PPU::tick_object_fetch() {
     }
     case ObjectFetchStep::OamSecond: {
         const int object_height = (lcdc & 0x04) != 0 ? 16 : 8;
-        int row = static_cast<int>(ly) + 16 - object.y;
+        int row = static_cast<int>(scanline) + 16 - object.y;
         if ((object_attributes & 0x40) != 0) {
             row = object_height - 1 - row;
         }
@@ -1059,7 +1133,7 @@ void PPU::mix_and_push_pixel() {
 
     framebuffer.set_pixel(
         screen_x,
-        ly,
+        scanline,
         first_frame_blank
             ? dmg_colors[0]
             : apply_palette(output_color, output_palette)
@@ -1085,7 +1159,7 @@ uint8_t PPU::read_oam_ppu(uint16_t offset) const {
 
 void PPU::corrupt_oam(BusAccessType access_type) {
     assert(mode == Mode::OamScan);
-    assert(dot_counter >= 0 && dot_counter < 80);
+    assert(dot_counter >= 0 && dot_counter < 84);
 
     if (accessed_oam_row < 8) {
         return;
