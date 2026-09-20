@@ -31,7 +31,7 @@ void Framebuffer::set_pixel(int x, int y, uint32_t rgba) {
 }
 
 const uint32_t* Framebuffer::pixels() const {
-    return pixels_.begin();
+    return pixels_.data();
 }
 
 PPU::PPU(InterruptController& interrupts) : interrupts(interrupts) {
