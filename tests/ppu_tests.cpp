@@ -32,6 +32,7 @@ constexpr uint8_t vblank_interrupt = 0x01;
 constexpr uint8_t stat_interrupt = 0x02;
 constexpr int dots_per_line = 456;
 constexpr int lcd_enable_line_dots = 455;
+constexpr int startup_line_dots = 450;
 constexpr int first_frame_dots =
     lcd_enable_line_dots + dots_per_line * 153;
 
@@ -80,7 +81,7 @@ void tick_to_second_frame(PPU& ppu)
 
 void tick_to_first_normal_line(PPU& ppu)
 {
-    ppu.tick_dots(lcd_enable_line_dots);
+    ppu.tick_dots(startup_line_dots);
 }
 
 } // namespace
@@ -229,6 +230,9 @@ TEST_CASE("PPU enabling the DMG LCD starts line zero in mode 0")
     REQUIRE(current_mode(ppu) == hblank_mode);
 
     ppu.tick_dots(1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+
+    ppu.tick_dots(1);
     REQUIRE(current_mode(ppu) == drawing_mode);
 }
 
@@ -243,7 +247,7 @@ TEST_CASE("PPU applies the DMG LCD-enable access phases")
     ppu.write(0xFE00, 0x22);
     ppu.write(lcdc, 0x80);
 
-    ppu.tick_dots(76);
+    ppu.tick_dots(77);
     ppu.write(0xFE00, 0x33);
     REQUIRE(ppu.read(0xFE00) == 0x33);
 
@@ -263,14 +267,14 @@ TEST_CASE("PPU applies the DMG LCD-enable access phases")
     REQUIRE(ppu.read(0x8000) == 0x44);
     REQUIRE(ppu.read(0xFE00) == 0x33);
 
-    ppu.tick_dots(203);
-    REQUIRE(ppu.read(ly) == 1);
+    ppu.tick_dots(198);
+    REQUIRE(ppu.read(ly) == 0);
 
-    ppu.tick_dots(1);
+    ppu.tick_dots(3);
     REQUIRE(ppu.read(ly) == 1);
     REQUIRE(current_mode(ppu) == hblank_mode);
 
-    ppu.tick_dots(4);
+    ppu.tick_dots(1);
     REQUIRE(current_mode(ppu) == oam_scan_mode);
 }
 
@@ -298,17 +302,18 @@ TEST_CASE("PPU visible scanline follows mode 2, mode 3, and mode 0 timing")
 
     ppu.tick_dots(199);
     REQUIRE(current_mode(ppu) == hblank_mode);
-    REQUIRE(ppu.read(ly) == 2);
+    REQUIRE(ppu.read(ly) == 1);
     REQUIRE((ppu.read(stat) & 0x04) == 0);
-    REQUIRE(ppu.read(oam_start) == 0xFF);
+    REQUIRE(ppu.read(oam_start) == 0x00);
     ppu.write(oam_start, 0x5A);
 
     ppu.tick_dots(1);
     REQUIRE(current_mode(ppu) == hblank_mode);
-    REQUIRE(ppu.read(ly) == 2);
+    REQUIRE(ppu.read(ly) == 1);
 
     ppu.tick_dots(3);
     REQUIRE(current_mode(ppu) == hblank_mode);
+    REQUIRE(ppu.read(ly) == 2);
 
     ppu.tick_dots(1);
     REQUIRE(current_mode(ppu) == oam_scan_mode);
@@ -328,14 +333,14 @@ TEST_CASE("PPU tick carries partial scanline dots between calls")
     ppu.write(lcdc, 0x80);
 
     ppu.tick_dots(200);
-    ppu.tick_dots(254);
-    REQUIRE(ppu.read(ly) == 1);
+    ppu.tick_dots(250);
+    REQUIRE(ppu.read(ly) == 0);
 
-    ppu.tick_dots(1);
+    ppu.tick_dots(3);
     REQUIRE(ppu.read(ly) == 1);
     REQUIRE(current_mode(ppu) == hblank_mode);
 
-    ppu.tick_dots(4);
+    ppu.tick_dots(1);
     REQUIRE(current_mode(ppu) == oam_scan_mode);
 }
 
@@ -354,14 +359,18 @@ TEST_CASE("PPU exposes the next LY before the internal scanline rollover")
     REQUIRE(current_mode(ppu) == hblank_mode);
 
     ppu.tick_dots(1);
-    REQUIRE(ppu.read(ly) == 2);
+    REQUIRE(ppu.read(ly) == 1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+
+    ppu.tick_dots(3);
+    REQUIRE(ppu.read(ly) == 1);
     REQUIRE(current_mode(ppu) == hblank_mode);
 
     ppu.tick_dots(4);
     REQUIRE(ppu.read(ly) == 2);
     REQUIRE(current_mode(ppu) == hblank_mode);
 
-    ppu.tick_dots(4);
+    ppu.tick_dots(1);
     REQUIRE(ppu.read(ly) == 2);
     REQUIRE(current_mode(ppu) == oam_scan_mode);
 }
@@ -385,11 +394,14 @@ TEST_CASE("PPU disables CPU OAM access in modes 2 and 3 and VRAM access in mode 
 
     REQUIRE(current_mode(ppu) == hblank_mode);
     REQUIRE(ppu.read(0x8000) == 0x11);
+    REQUIRE(ppu.read(0xFE00) == 0x22);
+
+    ppu.tick_dots(4);
     REQUIRE(ppu.read(0xFE00) == 0xFF);
 
     ppu.write(0x8000, 0x33);
     ppu.write(0xFE00, 0x44);
-    ppu.tick_dots(84);
+    ppu.tick_dots(80);
 
     REQUIRE(current_mode(ppu) == drawing_mode);
     REQUIRE(ppu.read(0x8000) == 0xFF);
@@ -424,17 +436,17 @@ TEST_CASE("PPU applies the late DMG mode 2 read and write access phases")
 
     ppu.tick_dots(79);
     REQUIRE(ppu.read(0x8000) == 0x11);
+    ppu.write(0x8000, 0x44);
     ppu.write(0xFE00, 0x33);
 
-    ppu.tick_dots(1);
+    ppu.tick_dots(5);
     REQUIRE(ppu.read(0x8000) == 0xFF);
     REQUIRE(ppu.read(0xFE00) == 0xFF);
-    ppu.write(0x8000, 0x44);
     ppu.write(0xFE00, 0x55);
 
     ppu.write(lcdc, 0x00);
     REQUIRE(ppu.read(0x8000) == 0x44);
-    REQUIRE(ppu.read(0xFE00) == 0x55);
+    REQUIRE(ppu.read(0xFE00) == 0x22);
 }
 
 TEST_CASE("PPU DMA writes bypass CPU OAM access restrictions")
@@ -446,6 +458,8 @@ TEST_CASE("PPU DMA writes bypass CPU OAM access restrictions")
     ppu.reset();
     ppu.write(lcdc, 0x80);
     tick_to_first_normal_line(ppu);
+
+    ppu.tick_dots(4);
 
     ppu.write_oam_dma(0, 0x12);
     ppu.write_oam_dma(159, 0x34);
@@ -490,16 +504,16 @@ TEST_CASE("PPU VBlank lasts ten scanlines before the next frame")
     ppu.write(lcdc, 0x80);
     ppu.tick_dots(lcd_enable_line_dots + dots_per_line * 143);
 
-    ppu.tick_dots(dots_per_line * 9 + 5);
+    ppu.tick_dots(dots_per_line * 9 + 1);
     REQUIRE(ppu.read(ly) == 153);
     REQUIRE(current_mode(ppu) == vblank_mode);
 
-    ppu.tick_dots(1);
+    ppu.tick_dots(2);
 
     REQUIRE(ppu.read(ly) == 0);
     REQUIRE(current_mode(ppu) == vblank_mode);
 
-    ppu.tick_dots(450);
+    ppu.tick_dots(448);
 
     REQUIRE(ppu.read(ly) == 0);
     REQUIRE(current_mode(ppu) == vblank_mode);
@@ -580,7 +594,7 @@ TEST_CASE("PPU requests a STAT interrupt when LY reaches LYC")
     ppu.write(lcdc, 0x80);
     interrupts.write_if(0x00);
 
-    ppu.tick_dots(lcd_enable_line_dots - 1);
+    ppu.tick_dots(startup_line_dots + 3);
     REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
 
     ppu.tick_dots(1);
@@ -604,7 +618,7 @@ TEST_CASE("PPU requests a STAT interrupt on entry to an enabled mode")
     ppu.write(lcdc, 0x80);
     interrupts.write_if(0x00);
 
-    ppu.tick_dots(250);
+    ppu.tick_dots(252);
     REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
 
     ppu.tick_dots(1);
@@ -624,7 +638,7 @@ TEST_CASE("PPU STAT interrupt source is edge-triggered")
     ppu.write(lcdc, 0x80);
     REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
 
-    ppu.tick_dots(lcd_enable_line_dots);
+    tick_to_first_normal_line(ppu);
     ppu.tick_dots(3);
     REQUIRE((interrupts.read_if() & stat_interrupt) != 0);
 
@@ -632,7 +646,12 @@ TEST_CASE("PPU STAT interrupt source is edge-triggered")
     ppu.tick_dots(1);
     REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
 
-    ppu.tick_dots(dots_per_line - 1);
+    ppu.tick_dots(252);
+    REQUIRE(ppu.read(ly) == 1);
+    REQUIRE(current_mode(ppu) == hblank_mode);
+    REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
+
+    ppu.tick_dots(203);
     REQUIRE(ppu.read(ly) == 2);
     REQUIRE(current_mode(ppu) == hblank_mode);
     REQUIRE((interrupts.read_if() & stat_interrupt) != 0);
@@ -686,6 +705,7 @@ TEST_CASE("PPU applies the DMG STAT write interrupt glitch outside mode 3")
     ppu.write(lyc, 2);
     ppu.write(lcdc, 0x80);
     tick_to_first_normal_line(ppu);
+    ppu.tick_dots(3);
     interrupts.write_if(0x00);
 
     ppu.write(stat, 0x00);
@@ -733,12 +753,12 @@ TEST_CASE("PPU applies the DMG LY and coincidence phases on line 153")
     ppu.write(lcdc, 0x80);
     interrupts.write_if(0x00);
 
-    ppu.tick_dots(lcd_enable_line_dots + dots_per_line * 152 + 5);
+    ppu.tick_dots(startup_line_dots + dots_per_line * 152 + 5);
     REQUIRE(ppu.read(ly) == 153);
     REQUIRE((ppu.read(stat) & 0x04) == 0);
     REQUIRE((interrupts.read_if() & stat_interrupt) == 0);
 
-    ppu.tick_dots(1);
+    ppu.tick_dots(3);
 
     REQUIRE(ppu.read(ly) == 0);
     REQUIRE((ppu.read(stat) & 0x04) == 0);
@@ -1211,13 +1231,13 @@ TEST_CASE("PPU latches the low SCX bits when mode 3 begins")
     ppu.write(lcdc, 0x80);
     tick_to_second_frame(ppu);
 
-    ppu.tick_dots(84);
+    ppu.tick_dots(78);
     ppu.write(scx, 7);
 
     ppu.tick_dots(171);
     REQUIRE(current_mode(ppu) == drawing_mode);
 
-    ppu.tick_dots(1);
+    ppu.tick_dots(9);
     REQUIRE(current_mode(ppu) == hblank_mode);
 }
 
@@ -1238,9 +1258,9 @@ TEST_CASE("PPU samples SCY separately for both background bitplanes")
     ppu.write(lcdc, 0x91);
     tick_to_second_frame(ppu);
 
-    ppu.tick_dots(92);
+    ppu.tick_dots(87);
     ppu.write(scy, 1);
-    ppu.tick_dots(dots_per_line - 92);
+    ppu.tick_dots(dots_per_line - 87);
 
     const uint32_t* pixels = ppu.get_framebuffer().pixels();
     REQUIRE(pixels[0] == 0x000000FF);
@@ -1260,7 +1280,7 @@ TEST_CASE("PPU latches the WY condition only at the start of mode 2")
 
     tick_to_first_normal_line(ppu);
     ppu.write(wy, 0);
-    ppu.tick_dots(261);
+    ppu.tick_dots(255);
     REQUIRE(current_mode(ppu) == drawing_mode);
 
     ppu.tick_dots(1);
@@ -1319,7 +1339,7 @@ TEST_CASE("PPU object fetching extends mode 3")
     ppu.write(lcdc, 0x82);
     tick_to_first_normal_line(ppu);
 
-    ppu.tick_dots(264);
+    ppu.tick_dots(266);
     REQUIRE(current_mode(ppu) == drawing_mode);
 
     ppu.tick_dots(1);
@@ -1334,15 +1354,15 @@ TEST_CASE("PPU object fetch timing follows the background fetch alignment")
     };
 
     constexpr std::array cases{
-        TimingCase{8, 265},
-        TimingCase{9, 264},
-        TimingCase{10, 263},
-        TimingCase{11, 262},
-        TimingCase{12, 261},
-        TimingCase{13, 260},
-        TimingCase{14, 260},
-        TimingCase{15, 260},
-        TimingCase{16, 265},
+        TimingCase{8, 267},
+        TimingCase{9, 266},
+        TimingCase{10, 265},
+        TimingCase{11, 264},
+        TimingCase{12, 263},
+        TimingCase{13, 262},
+        TimingCase{14, 262},
+        TimingCase{15, 262},
+        TimingCase{16, 267},
     };
 
     for (const auto& test_case : cases) {
@@ -1383,7 +1403,7 @@ TEST_CASE("PPU latches an object fetch cancel when LCDC object enable falls")
     ppu.tick_dots(157);
 
     REQUIRE(current_mode(ppu) == drawing_mode);
-    ppu.tick_dots(1);
+    ppu.tick_dots(3);
     REQUIRE(current_mode(ppu) == hblank_mode);
 }
 
@@ -1405,7 +1425,7 @@ TEST_CASE("PPU serializes object fetch stalls within one background tile")
     ppu.tick_dots(270);
     REQUIRE(current_mode(ppu) == drawing_mode);
 
-    ppu.tick_dots(1);
+    ppu.tick_dots(3);
     REQUIRE(current_mode(ppu) == hblank_mode);
 }
 
@@ -1426,7 +1446,7 @@ TEST_CASE("PPU discovers objects progressively during the mode 2 scan")
     ppu.tick_dots(257);
     REQUIRE(current_mode(ppu) == drawing_mode);
 
-    ppu.tick_dots(1);
+    ppu.tick_dots(3);
     REQUIRE(current_mode(ppu) == hblank_mode);
 }
 

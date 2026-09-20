@@ -74,7 +74,7 @@ TEST_CASE("OAM DMA reads VRAM through the PPU access lock")
 
     fixture.ppu.write(0x8000, 0xA5);
     fixture.ppu.write(0xFF40, 0x80);
-    fixture.ppu.tick_dots(79);
+    fixture.ppu.tick_dots(80);
 
     REQUIRE(fixture.ppu.read(0x8000) == 0xFF);
     REQUIRE(fixture.bus.read_dma_source(0x8000) == 0xA5);
