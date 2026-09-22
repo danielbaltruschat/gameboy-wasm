@@ -29,21 +29,65 @@ target_include_directories(gameboy_core PUBLIC
 
 target_compile_features(gameboy_core PUBLIC cxx_std_20)
 
-add_executable(gameboy_wasm
-    "src/main.cpp"
-)
+if(EMSCRIPTEN)
+  add_executable(gameboy_web
+      "src/web_bindings.cpp"
+  )
 
-target_link_libraries(gameboy_wasm PRIVATE
-    gameboy_core
-)
+  target_link_libraries(gameboy_web PRIVATE
+      gameboy_core
+  )
 
-add_executable(dmg_test_runner
-    "tools/dmg_test_runner.cpp"
-)
+  set_target_properties(gameboy_web PROPERTIES
+      OUTPUT_NAME "gameboy"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web"
+  )
 
-target_link_libraries(dmg_test_runner PRIVATE
-    gameboy_core
-)
+  target_link_options(gameboy_web PRIVATE
+      "--bind"
+      "-sALLOW_MEMORY_GROWTH=1"
+      "-sENVIRONMENT=web"
+      "-sEXPORT_ES6=1"
+      "-sEXPORTED_FUNCTIONS=['_malloc','_free']"
+      "-sEXPORTED_RUNTIME_METHODS=['HEAPU8']"
+      "-sFILESYSTEM=0"
+      "-sMODULARIZE=1"
+  )
+
+  set(web_output_directory "${CMAKE_BINARY_DIR}/web")
+  set(web_assets)
+  foreach(web_asset IN ITEMS index.html app.js style.css)
+    add_custom_command(
+        OUTPUT "${web_output_directory}/${web_asset}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${web_output_directory}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/web/${web_asset}"
+            "${web_output_directory}/${web_asset}"
+        DEPENDS "${CMAKE_SOURCE_DIR}/web/${web_asset}"
+        VERBATIM
+    )
+    list(APPEND web_assets "${web_output_directory}/${web_asset}")
+  endforeach()
+
+  add_custom_target(gameboy_web_assets ALL DEPENDS ${web_assets})
+  add_dependencies(gameboy_web gameboy_web_assets)
+else()
+  add_executable(gameboy_wasm
+      "src/main.cpp"
+  )
+
+  target_link_libraries(gameboy_wasm PRIVATE
+      gameboy_core
+  )
+
+  add_executable(dmg_test_runner
+      "tools/dmg_test_runner.cpp"
+  )
+
+  target_link_libraries(dmg_test_runner PRIVATE
+      gameboy_core
+  )
+endif()
 
 include(CTest)
 

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#c6d7a3">
+  <title>DMG Console</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="console-shell">
+    <header class="masthead">
+      <p class="eyebrow">Dot-accurate DMG emulator</p>
+      <h1>DMG<br><span>CONSOLE</span></h1>
+      <p class="status" id="status" aria-live="polite">Loading emulator...</p>
+    </header>
+
+    <section class="display-panel" aria-label="Game screen">
+      <canvas id="screen" width="160" height="144" aria-label="Game Boy display"></canvas>
+      <div class="screen-reflection" aria-hidden="true"></div>
+    </section>
+
+    <section class="load-panel" aria-label="ROM loading controls">
+      <label class="file-control">
+        <span>Boot ROM override <small>Optional, 256 bytes</small></span>
+        <input id="boot-rom" type="file" accept=".bin,application/octet-stream">
+      </label>
+      <label class="file-control">
+        <span>Game ROM <small>.gb</small></span>
+        <input id="game-rom" type="file" accept=".gb,.gbc,application/octet-stream">
+      </label>
+      <button id="reset" type="button" disabled>Reset</button>
+    </section>
+
+    <section class="controls" aria-label="Keyboard controls">
+      <div><kbd>Arrow keys</kbd><span>Move</span></div>
+      <div><kbd>Z</kbd><kbd>X</kbd><span>B / A</span></div>
+      <div><kbd>Shift</kbd><kbd>Enter</kbd><span>Select / Start</span></div>
+    </section>
+
+    <footer>Includes SameBoy's open compatibility boot ROM. Audio and link-cable emulation are not yet included.</footer>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
