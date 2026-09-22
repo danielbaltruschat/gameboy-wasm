@@ -1,7 +1,12 @@
 build/
+build-web/
 .cache/clangd/index/
 __cmake_systeminformation/CMakeFiles/
 vcpkg_installed/
 build-vcpkg/
 compile_commands.json
 .agents/skills/
+skills-lock.json
+.idea/
+.claude/
+.cache/
