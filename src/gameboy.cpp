@@ -20,9 +20,9 @@ void GameBoy::load_rom(std::span<const uint8_t> rom)
     cartridge.load_rom(rom);
 }
 
-void GameBoy::set_rtc_clock(Cartridge::RtcClock clock, void* context)
+void GameBoy::set_rtc_callback(Cartridge::RtcCallback callback, void* context)
 {
-    cartridge.set_rtc_clock(clock, context);
+    cartridge.set_rtc_callback(callback, context);
 }
 
 void GameBoy::advance_rtc_milliseconds(uint64_t milliseconds)

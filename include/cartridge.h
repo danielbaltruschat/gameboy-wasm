@@ -79,14 +79,14 @@ struct Mbc5State {
 
 class Cartridge {
 public:
-    using RtcClock = uint64_t (*)(void* context);
+    using RtcCallback = uint64_t (*)(void* context);
 
     Cartridge() = default;
     explicit Cartridge(std::vector<uint8_t> rom);
 
     void load_rom(std::span<const uint8_t> data);
     void reset_mapper();
-    void set_rtc_clock(RtcClock clock, void* context);
+    void set_rtc_callback(RtcCallback callback, void* context);
     void advance_rtc_milliseconds(uint64_t milliseconds);
 
     bool has_battery() const;
@@ -124,10 +124,10 @@ private:
     Mbc3Rtc mbc3_rtc;
     Mbc5State mbc5;
 
-    RtcClock rtc_clock = nullptr;
-    void* rtc_clock_context = nullptr;
-    uint64_t rtc_clock_anchor = 0;
-    bool rtc_clock_anchored = false;
+    RtcCallback rtc_callback = nullptr;
+    void* rtc_callback_context = nullptr;
+    uint64_t rtc_time_anchor = 0;
+    bool rtc_time_anchored = false;
     bool persistent_dirty = false;
     uint64_t persistent_revision = 0;
 

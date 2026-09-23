@@ -203,8 +203,8 @@ void Cartridge::configure_mapper() {
 
     mbc2 = {};
     mbc3_rtc = {};
-    rtc_clock_anchor = 0;
-    rtc_clock_anchored = false;
+    rtc_time_anchor = 0;
+    rtc_time_anchored = false;
     persistent_dirty = false;
     persistent_revision = 0;
 }
@@ -220,12 +220,12 @@ void Cartridge::reset_mapper() {
     mbc5 = {};
 }
 
-void Cartridge::set_rtc_clock(RtcClock clock, void* context)
+void Cartridge::set_rtc_callback(RtcCallback callback, void* context)
 {
-    rtc_clock = clock;
-    rtc_clock_context = context;
-    rtc_clock_anchor = 0;
-    rtc_clock_anchored = false;
+    rtc_callback = callback;
+    rtc_callback_context = context;
+    rtc_time_anchor = 0;
+    rtc_time_anchored = false;
 }
 
 bool Cartridge::has_battery() const
@@ -324,8 +324,8 @@ bool Cartridge::load_rtc_registers(const Mbc3RtcRegisters& registers)
     mbc3_rtc.halted = registers.halted;
     mbc3_rtc.day_carry = registers.day_carry;
     persistent_dirty = false;
-    rtc_clock_anchor = 0;
-    rtc_clock_anchored = false;
+    rtc_time_anchor = 0;
+    rtc_time_anchored = false;
     return true;
 }
 
@@ -341,22 +341,22 @@ void Cartridge::mark_persistent_dirty()
 
 void Cartridge::sync_rtc()
 {
-    if (!capabilities.hasTimer || rtc_clock == nullptr) {
+    if (!capabilities.hasTimer || rtc_callback == nullptr) {
         return;
     }
 
-    const uint64_t now = rtc_clock(rtc_clock_context);
-    if (!rtc_clock_anchored) {
-        rtc_clock_anchor = now;
-        rtc_clock_anchored = true;
+    const uint64_t now = rtc_callback(rtc_callback_context);
+    if (!rtc_time_anchored) {
+        rtc_time_anchor = now;
+        rtc_time_anchored = true;
         return;
     }
-    if (now <= rtc_clock_anchor) {
+    if (now <= rtc_time_anchor) {
         return;
     }
 
-    advance_rtc_milliseconds_internal(now - rtc_clock_anchor);
-    rtc_clock_anchor = now;
+    advance_rtc_milliseconds_internal(now - rtc_time_anchor);
+    rtc_time_anchor = now;
 }
 
 void Cartridge::advance_rtc_milliseconds(uint64_t milliseconds)

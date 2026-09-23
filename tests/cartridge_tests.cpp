@@ -105,7 +105,7 @@ TEST_CASE("MBC3 RTC uses the injected clock and preserves its raw state")
 {
     RtcClock clock;
     Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x03));
-    cartridge.set_rtc_clock(RtcClock::now, &clock);
+    cartridge.set_rtc_callback(RtcClock::now, &clock);
     cartridge.write(0x0000, 0x0A);
     cartridge.write(0x4000, 0x08);
     cartridge.write(0xA000, 10);
@@ -128,7 +128,7 @@ TEST_CASE("MBC3 RTC does not advance its injected clock while halted")
 {
     RtcClock clock;
     Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x03));
-    cartridge.set_rtc_clock(RtcClock::now, &clock);
+    cartridge.set_rtc_callback(RtcClock::now, &clock);
     cartridge.write(0x0000, 0x0A);
     cartridge.write(0x4000, 0x08);
     cartridge.write(0xA000, 20);

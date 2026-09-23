@@ -23,7 +23,7 @@ public:
     void load_rom(std::span<const uint8_t> rom);
     void reset();
 
-    void set_rtc_clock(Cartridge::RtcClock clock, void* context);
+    void set_rtc_callback(Cartridge::RtcCallback callback, void* context);
     void advance_rtc_milliseconds(uint64_t milliseconds);
     bool has_battery() const;
     bool has_rtc() const;

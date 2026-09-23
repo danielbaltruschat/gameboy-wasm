@@ -119,7 +119,7 @@ public:
           steady_clock_origin(std::chrono::steady_clock::now())
     {
         gameboy.load_boot_rom(sameboy::dmg_boot_rom);
-        gameboy.set_rtc_clock(rtc_clock, this);
+        gameboy.set_rtc_callback(rtc_callback, this);
     }
 
     bool initialize()
@@ -255,7 +255,7 @@ private:
         ).count();
     }
 
-    static uint64_t rtc_clock(void* context)
+    static uint64_t rtc_callback(void* context)
     {
         const auto& self = *static_cast<WebGameBoy*>(context);
         return self.snapshot_clock_active ? self.snapshot_rtc_utc : self.rtc_utc_milliseconds();
@@ -277,7 +277,7 @@ private:
             pending_rom.begin(), pending_rom.end()
         );
         gameboy.load_rom(pending_rom);
-        gameboy.set_rtc_clock(rtc_clock, this);
+        gameboy.set_rtc_callback(rtc_callback, this);
         pending_rom.clear();
         has_rom = true;
         cartridge_ready = false;
