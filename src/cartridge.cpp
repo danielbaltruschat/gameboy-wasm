@@ -1,6 +1,4 @@
 #include "cartridge.h"
-#include "dmg_clock.h"
-
 #include <algorithm>
 #include <cassert>
 #include <utility>
@@ -10,6 +8,9 @@ namespace {
 constexpr std::size_t minimum_header_size = 0x150;
 constexpr std::size_t rom_bank_size = 0x4000;
 constexpr std::size_t ram_bank_size = 0x2000;
+constexpr uint64_t rtc_ticks_per_second = 32768;
+constexpr uint64_t milliseconds_per_second = 1000;
+constexpr uint64_t seconds_per_day = 24 * 60 * 60;
 
 bool has_mbc1_multicart_layout(const std::vector<uint8_t>& rom) {
     constexpr std::size_t logo_offset = 0x0104;
@@ -202,6 +203,10 @@ void Cartridge::configure_mapper() {
 
     mbc2 = {};
     mbc3_rtc = {};
+    rtc_clock_anchor = 0;
+    rtc_clock_anchored = false;
+    persistent_dirty = false;
+    persistent_revision = 0;
 }
 
 void Cartridge::reset_mapper() {
@@ -213,6 +218,226 @@ void Cartridge::reset_mapper() {
     mbc1 = {};
     mbc3_rtc.latch_armed = false;
     mbc5 = {};
+}
+
+void Cartridge::set_rtc_clock(RtcClock clock, void* context)
+{
+    rtc_clock = clock;
+    rtc_clock_context = context;
+    rtc_clock_anchor = 0;
+    rtc_clock_anchored = false;
+}
+
+bool Cartridge::has_battery() const
+{
+    return capabilities.hasBattery;
+}
+
+bool Cartridge::has_rtc() const
+{
+    return capabilities.hasTimer;
+}
+
+bool Cartridge::battery_dirty() const
+{
+    return persistent_dirty;
+}
+
+uint64_t Cartridge::battery_revision() const
+{
+    return persistent_revision;
+}
+
+std::size_t Cartridge::battery_ram_size() const
+{
+    if (!capabilities.hasBattery) {
+        return 0;
+    }
+
+    return capabilities.mapper == MapperType::Mbc2 ? mbc2.ram.size() : ram.size();
+}
+
+std::vector<uint8_t> Cartridge::battery_ram() const
+{
+    sync_rtc();
+
+    if (!capabilities.hasBattery) {
+        return {};
+    }
+
+    if (capabilities.mapper == MapperType::Mbc2) {
+        return {mbc2.ram.begin(), mbc2.ram.end()};
+    }
+
+    return ram;
+}
+
+std::vector<uint8_t> Cartridge::take_battery_ram()
+{
+    std::vector<uint8_t> result = battery_ram();
+    persistent_dirty = false;
+    return result;
+}
+
+bool Cartridge::load_battery_ram(std::span<const uint8_t> data)
+{
+    if (!capabilities.hasBattery || data.size() != battery_ram_size()) {
+        return false;
+    }
+
+    if (capabilities.mapper == MapperType::Mbc2) {
+        std::copy(data.begin(), data.end(), mbc2.ram.begin());
+    } else {
+        std::copy(data.begin(), data.end(), ram.begin());
+    }
+    persistent_dirty = false;
+    return true;
+}
+
+Mbc3RtcRegisters Cartridge::rtc_registers()
+{
+    sync_rtc();
+    return {
+        mbc3_rtc.subsecond_ticks,
+        mbc3_rtc.subsecond_remainder,
+        mbc3_rtc.seconds,
+        mbc3_rtc.minutes,
+        mbc3_rtc.hours,
+        mbc3_rtc.days,
+        mbc3_rtc.halted,
+        mbc3_rtc.day_carry,
+    };
+}
+
+bool Cartridge::load_rtc_registers(const Mbc3RtcRegisters& registers)
+{
+    if (!capabilities.hasTimer) {
+        return false;
+    }
+
+    mbc3_rtc.subsecond_ticks = registers.subsecond_ticks;
+    mbc3_rtc.subsecond_remainder = registers.subsecond_remainder;
+    mbc3_rtc.seconds = registers.seconds;
+    mbc3_rtc.minutes = registers.minutes;
+    mbc3_rtc.hours = registers.hours;
+    mbc3_rtc.days = registers.days;
+    mbc3_rtc.halted = registers.halted;
+    mbc3_rtc.day_carry = registers.day_carry;
+    persistent_dirty = false;
+    rtc_clock_anchor = 0;
+    rtc_clock_anchored = false;
+    return true;
+}
+
+void Cartridge::mark_persistent_dirty() const
+{
+    if (!capabilities.hasBattery) {
+        return;
+    }
+
+    persistent_dirty = true;
+    ++persistent_revision;
+}
+
+void Cartridge::sync_rtc() const
+{
+    if (!capabilities.hasTimer || rtc_clock == nullptr) {
+        return;
+    }
+
+    const uint64_t now = rtc_clock(rtc_clock_context);
+    if (!rtc_clock_anchored) {
+        rtc_clock_anchor = now;
+        rtc_clock_anchored = true;
+        return;
+    }
+    if (now <= rtc_clock_anchor) {
+        return;
+    }
+
+    advance_rtc_milliseconds_internal(now - rtc_clock_anchor);
+    rtc_clock_anchor = now;
+}
+
+void Cartridge::advance_rtc_milliseconds(uint64_t milliseconds)
+{
+    advance_rtc_milliseconds_internal(milliseconds);
+}
+
+void Cartridge::advance_rtc_milliseconds_internal(uint64_t milliseconds) const
+{
+    if (!capabilities.hasTimer || mbc3_rtc.halted || milliseconds == 0) {
+        return;
+    }
+
+    const uint64_t whole_seconds = milliseconds / milliseconds_per_second;
+    const uint64_t fractional_milliseconds = milliseconds % milliseconds_per_second;
+    advance_rtc_seconds(whole_seconds);
+
+    const uint64_t total_fractional_ticks =
+        static_cast<uint64_t>(mbc3_rtc.subsecond_remainder) +
+        fractional_milliseconds * rtc_ticks_per_second;
+    const uint64_t additional_ticks = total_fractional_ticks / milliseconds_per_second;
+    mbc3_rtc.subsecond_remainder = total_fractional_ticks % milliseconds_per_second;
+
+    const uint64_t total_ticks = static_cast<uint64_t>(mbc3_rtc.subsecond_ticks) + additional_ticks;
+    mbc3_rtc.subsecond_ticks = total_ticks % rtc_ticks_per_second;
+    advance_rtc_seconds(total_ticks / rtc_ticks_per_second);
+    mark_persistent_dirty();
+}
+
+void Cartridge::advance_rtc_seconds(uint64_t seconds) const
+{
+    if (!capabilities.hasTimer || mbc3_rtc.halted || seconds == 0) {
+        return;
+    }
+
+    // Hardware writes can put the counter fields outside their normal ranges.
+    // One tick preserves the observable wrap behavior before using fast arithmetic.
+    if (mbc3_rtc.seconds >= 60 || mbc3_rtc.minutes >= 60 || mbc3_rtc.hours >= 24) {
+        if (mbc3_rtc.seconds != 59) {
+            mbc3_rtc.seconds = (mbc3_rtc.seconds + 1) & 0x3F;
+        } else {
+            mbc3_rtc.seconds = 0;
+            if (mbc3_rtc.minutes != 59) {
+                mbc3_rtc.minutes = (mbc3_rtc.minutes + 1) & 0x3F;
+            } else {
+                mbc3_rtc.minutes = 0;
+                if (mbc3_rtc.hours != 23) {
+                    mbc3_rtc.hours = (mbc3_rtc.hours + 1) & 0x1F;
+                } else {
+                    mbc3_rtc.hours = 0;
+                    if (mbc3_rtc.days == 0x01FF) {
+                        mbc3_rtc.days = 0;
+                        mbc3_rtc.day_carry = true;
+                    } else {
+                        ++mbc3_rtc.days;
+                    }
+                }
+            }
+        }
+        --seconds;
+        if (seconds == 0) {
+            return;
+        }
+    }
+
+    const uint64_t current_seconds =
+        static_cast<uint64_t>(mbc3_rtc.hours) * 60 * 60 +
+        static_cast<uint64_t>(mbc3_rtc.minutes) * 60 +
+        mbc3_rtc.seconds;
+    const uint64_t total_seconds = current_seconds + seconds;
+    const uint64_t day_increment = total_seconds / seconds_per_day;
+    const uint64_t time_of_day = total_seconds % seconds_per_day;
+    const uint64_t total_days = static_cast<uint64_t>(mbc3_rtc.days) + day_increment;
+
+    if (total_days > 0x01FF) {
+        mbc3_rtc.day_carry = true;
+    }
+    mbc3_rtc.days = total_days & 0x01FF;
+    mbc3_rtc.hours = time_of_day / (60 * 60);
+    mbc3_rtc.minutes = (time_of_day / 60) % 60;
+    mbc3_rtc.seconds = time_of_day % 60;
 }
 
 uint8_t Cartridge::read(uint16_t address) const {
@@ -295,6 +520,7 @@ void Cartridge::write(uint16_t address, uint8_t value) {
             mbc3_rtc.latch_armed = true;
         } else {
             if (value == 0x01 && mbc3_rtc.latch_armed) {
+                sync_rtc();
                 mbc3_rtc.latched_seconds = mbc3_rtc.seconds;
                 mbc3_rtc.latched_minutes = mbc3_rtc.minutes;
                 mbc3_rtc.latched_hours = mbc3_rtc.hours;
@@ -466,15 +692,21 @@ std::optional<uint8_t> Cartridge::read_external_ram(uint16_t address) const {
 void Cartridge::write_external_ram(uint16_t address, uint8_t value) {
     assert(address >= 0xA000 && address <= 0xBFFF);
 
+    if (capabilities.hasTimer) {
+        sync_rtc();
+    }
+
     switch (capabilities.mapper) {
     case MapperType::RomOnly:
         if (!ram.empty()) {
             ram[effective_ram_offset(address)] = value;
+            mark_persistent_dirty();
         }
         break;
     case MapperType::Mbc2:
         if (ram_enabled) {
             mbc2.ram[(address - 0xA000) & 0x01FF] = value & 0x0F;
+            mark_persistent_dirty();
         }
         break;
     case MapperType::Mbc3:
@@ -484,6 +716,7 @@ void Cartridge::write_external_ram(uint16_t address, uint8_t value) {
         if (rtc_register_select >= 0x08 && rtc_register_select <= 0x0C) {
             if (capabilities.hasTimer) {
                 write_rtc_register(value);
+                mark_persistent_dirty();
             }
         } else if (
             rtc_register_select <= 0x07 &&
@@ -491,12 +724,14 @@ void Cartridge::write_external_ram(uint16_t address, uint8_t value) {
             !ram.empty()
         ) {
             ram[effective_ram_offset(address)] = value;
+            mark_persistent_dirty();
         }
         break;
     case MapperType::Mbc1:
     case MapperType::Mbc5:
         if (ram_enabled && !ram.empty()) {
             ram[effective_ram_offset(address)] = value;
+            mark_persistent_dirty();
         }
         break;
     case MapperType::Unknown:
@@ -505,6 +740,8 @@ void Cartridge::write_external_ram(uint16_t address, uint8_t value) {
 }
 
 uint8_t Cartridge::read_rtc_register() const {
+    sync_rtc();
+
     switch (rtc_register_select) {
     case 0x08:
         return mbc3_rtc.latched_seconds;
@@ -528,7 +765,8 @@ void Cartridge::write_rtc_register(uint8_t value) {
     switch (rtc_register_select) {
     case 0x08:
         mbc3_rtc.seconds = value & 0x3F;
-        mbc3_rtc.subsecond_dots = 0;
+        mbc3_rtc.subsecond_ticks = 0;
+        mbc3_rtc.subsecond_remainder = 0;
         break;
     case 0x09:
         mbc3_rtc.minutes = value & 0x3F;
@@ -549,58 +787,5 @@ void Cartridge::write_rtc_register(uint8_t value) {
         break;
     default:
         break;
-    }
-}
-
-void Cartridge::tick_rtc_dots(uint32_t dots) {
-    if (
-        capabilities.mapper != MapperType::Mbc3 ||
-        !capabilities.hasTimer ||
-        mbc3_rtc.halted ||
-        dots == 0
-    ) {
-        return;
-    }
-
-    const uint64_t total_dots = static_cast<uint64_t>(mbc3_rtc.subsecond_dots) + dots;
-    mbc3_rtc.subsecond_dots = total_dots % dmg::dot_clock_hz;
-    tick_rtc_seconds(total_dots / dmg::dot_clock_hz);
-}
-
-void Cartridge::tick_rtc_seconds(uint32_t seconds) {
-    if (
-        capabilities.mapper != MapperType::Mbc3 ||
-        !capabilities.hasTimer ||
-        mbc3_rtc.halted ||
-        seconds == 0
-    ) {
-        return;
-    }
-
-    for (uint32_t tick = 0; tick < seconds; ++tick) {
-        if (mbc3_rtc.seconds != 59) {
-            mbc3_rtc.seconds = (mbc3_rtc.seconds + 1) & 0x3F;
-            continue;
-        }
-        mbc3_rtc.seconds = 0;
-
-        if (mbc3_rtc.minutes != 59) {
-            mbc3_rtc.minutes = (mbc3_rtc.minutes + 1) & 0x3F;
-            continue;
-        }
-        mbc3_rtc.minutes = 0;
-
-        if (mbc3_rtc.hours != 23) {
-            mbc3_rtc.hours = (mbc3_rtc.hours + 1) & 0x1F;
-            continue;
-        }
-        mbc3_rtc.hours = 0;
-
-        if (mbc3_rtc.days == 0x01FF) {
-            mbc3_rtc.days = 0;
-            mbc3_rtc.day_carry = true;
-        } else {
-            mbc3_rtc.days++;
-        }
     }
 }

@@ -41,7 +41,8 @@ struct Mbc2State {
 };
 
 struct Mbc3Rtc {
-    uint32_t subsecond_dots = 0;
+    uint16_t subsecond_ticks = 0;
+    uint16_t subsecond_remainder = 0;
     uint8_t seconds = 0;
     uint8_t minutes = 0;
     uint8_t hours = 0;
@@ -58,6 +59,18 @@ struct Mbc3Rtc {
     bool latch_armed = false;
 };
 
+// Battery-backed MBC3 RTC state. Latch and mapper selection state are volatile.
+struct Mbc3RtcRegisters {
+    uint16_t subsecond_ticks = 0;
+    uint16_t subsecond_remainder = 0;
+    uint8_t seconds = 0;
+    uint8_t minutes = 0;
+    uint8_t hours = 0;
+    uint16_t days = 0;
+    bool halted = false;
+    bool day_carry = false;
+};
+
 struct Mbc5State {
     uint16_t rom_bank = 1; // 9-bit value.
     uint8_t ram_bank = 0;
@@ -66,13 +79,25 @@ struct Mbc5State {
 
 class Cartridge {
 public:
+    using RtcClock = uint64_t (*)(void* context);
+
     Cartridge() = default;
     explicit Cartridge(std::vector<uint8_t> rom);
 
     void load_rom(std::span<const uint8_t> data);
     void reset_mapper();
-    void tick_rtc_dots(uint32_t dots);
-    void tick_rtc_seconds(uint32_t seconds);
+    void set_rtc_clock(RtcClock clock, void* context);
+    void advance_rtc_milliseconds(uint64_t milliseconds);
+
+    bool has_battery() const;
+    bool has_rtc() const;
+    bool battery_dirty() const;
+    uint64_t battery_revision() const;
+    std::vector<uint8_t> battery_ram() const;
+    std::vector<uint8_t> take_battery_ram();
+    bool load_battery_ram(std::span<const uint8_t> data);
+    Mbc3RtcRegisters rtc_registers();
+    bool load_rtc_registers(const Mbc3RtcRegisters& registers);
 
     uint8_t read(uint16_t address) const;
     std::optional<uint8_t> read_bus(uint16_t address) const;
@@ -96,8 +121,15 @@ private:
 
     Mbc1State mbc1;
     Mbc2State mbc2;
-    Mbc3Rtc mbc3_rtc;
+    mutable Mbc3Rtc mbc3_rtc;
     Mbc5State mbc5;
+
+    RtcClock rtc_clock = nullptr;
+    void* rtc_clock_context = nullptr;
+    mutable uint64_t rtc_clock_anchor = 0;
+    mutable bool rtc_clock_anchored = false;
+    mutable bool persistent_dirty = false;
+    mutable uint64_t persistent_revision = 0;
 
     void parse_header();
     void configure_mapper();
@@ -108,4 +140,9 @@ private:
     void write_external_ram(uint16_t address, uint8_t value);
     uint8_t read_rtc_register() const;
     void write_rtc_register(uint8_t value);
+    void sync_rtc() const;
+    void advance_rtc_milliseconds_internal(uint64_t milliseconds) const;
+    void advance_rtc_seconds(uint64_t seconds) const;
+    void mark_persistent_dirty() const;
+    std::size_t battery_ram_size() const;
 };

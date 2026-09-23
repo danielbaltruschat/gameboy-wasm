@@ -85,7 +85,6 @@ struct Machine {
         joypad.tick_dots(1);
 
         ++total_dots;
-        cartridge.tick_rtc_dots(1);
 
         if (ppu.is_frame_ready()) {
             ++frames;

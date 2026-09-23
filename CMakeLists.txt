@@ -30,12 +30,18 @@ target_include_directories(gameboy_core PUBLIC
 target_compile_features(gameboy_core PUBLIC cxx_std_20)
 
 if(EMSCRIPTEN)
+  find_path(PICOSHA2_INCLUDE_DIRS NAMES picosha2.h REQUIRED)
+
   add_executable(gameboy_web
       "src/web_bindings.cpp"
   )
 
   target_link_libraries(gameboy_web PRIVATE
       gameboy_core
+  )
+
+  target_include_directories(gameboy_web PRIVATE
+      ${PICOSHA2_INCLUDE_DIRS}
   )
 
   set_target_properties(gameboy_web PROPERTIES

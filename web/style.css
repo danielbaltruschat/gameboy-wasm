@@ -54,10 +54,11 @@ h1 span { color: var(--accent); font-size: .48em; letter-spacing: .18em; }
 canvas { background: var(--screen-light); display: block; height: auto; image-rendering: pixelated; width: 100%; }
 .screen-reflection { background: linear-gradient(120deg, #ffffff33 0 22%, transparent 22% 60%, #ffffff12 60%); inset: .65rem; pointer-events: none; position: absolute; }
 
-.load-panel { display: grid; gap: .75rem; grid-template-columns: 1fr 1fr auto; margin-top: 1.25rem; }
+.load-panel { display: grid; gap: .75rem; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 1.25rem; }
 .file-control { border-bottom: 2px solid #958b72; cursor: pointer; font-size: .73rem; font-weight: 700; letter-spacing: .06em; padding: .45rem 0; text-transform: uppercase; }
 .file-control small { color: #706852; display: block; font-size: .65rem; font-weight: 500; letter-spacing: 0; text-transform: none; }
-.file-control input { display: block; margin-top: .35rem; max-width: 100%; }
+.file-control input { display: block; margin-top: .35rem; max-width: 100%; min-width: 0; width: 100%; }
+.file-control:nth-of-type(3) { grid-column: 1 / -1; }
 button { align-self: end; background: var(--accent); border: 0; border-radius: 1.3rem; color: white; cursor: pointer; font: inherit; font-size: .72rem; font-weight: 800; letter-spacing: .08em; min-height: 2.5rem; padding: 0 .85rem; text-transform: uppercase; }
 button:disabled { background: #a69e89; cursor: not-allowed; }
 

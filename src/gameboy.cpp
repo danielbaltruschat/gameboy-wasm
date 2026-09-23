@@ -20,6 +20,61 @@ void GameBoy::load_rom(std::span<const uint8_t> rom)
     cartridge.load_rom(rom);
 }
 
+void GameBoy::set_rtc_clock(Cartridge::RtcClock clock, void* context)
+{
+    cartridge.set_rtc_clock(clock, context);
+}
+
+void GameBoy::advance_rtc_milliseconds(uint64_t milliseconds)
+{
+    cartridge.advance_rtc_milliseconds(milliseconds);
+}
+
+bool GameBoy::has_battery() const
+{
+    return cartridge.has_battery();
+}
+
+bool GameBoy::has_rtc() const
+{
+    return cartridge.has_rtc();
+}
+
+bool GameBoy::battery_dirty() const
+{
+    return cartridge.battery_dirty();
+}
+
+uint64_t GameBoy::battery_revision() const
+{
+    return cartridge.battery_revision();
+}
+
+std::vector<uint8_t> GameBoy::battery_ram() const
+{
+    return cartridge.battery_ram();
+}
+
+std::vector<uint8_t> GameBoy::take_battery_ram()
+{
+    return cartridge.take_battery_ram();
+}
+
+bool GameBoy::load_battery_ram(std::span<const uint8_t> data)
+{
+    return cartridge.load_battery_ram(data);
+}
+
+Mbc3RtcRegisters GameBoy::rtc_registers()
+{
+    return cartridge.rtc_registers();
+}
+
+bool GameBoy::load_rtc_registers(const Mbc3RtcRegisters& registers)
+{
+    return cartridge.load_rtc_registers(registers);
+}
+
 void GameBoy::reset()
 {
     interrupts.reset();
@@ -52,7 +107,6 @@ void GameBoy::tick_dot()
     joypad.tick_dots(1);
 
     ++total_dots;
-    cartridge.tick_rtc_dots(1);
 }
 
 int GameBoy::step_instruction()

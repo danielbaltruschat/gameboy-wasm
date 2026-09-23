@@ -7,11 +7,19 @@
 #include <vector>
 
 #include "cartridge.h"
-#include "dmg_clock.h"
 
 namespace {
 
 constexpr std::size_t rom_bank_size = 0x4000;
+
+struct RtcClock {
+    uint64_t milliseconds = 0;
+
+    static uint64_t now(void* context)
+    {
+        return static_cast<RtcClock*>(context)->milliseconds;
+    }
+};
 
 std::vector<uint8_t> make_rom(
     std::size_t bank_count,
@@ -43,6 +51,95 @@ TEST_CASE("Cartridge reports no ROM before loading")
     Cartridge cartridge;
 
     REQUIRE_FALSE(cartridge.loaded());
+}
+
+TEST_CASE("Battery RAM snapshots preserve standard mapper RAM and clear dirty state")
+{
+    Cartridge cartridge(make_rom(4, 0x03, 0x01, 0x03));
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0x4000, 0x01);
+    cartridge.write(0xA000, 0xA5);
+
+    REQUIRE(cartridge.battery_dirty());
+    REQUIRE(cartridge.battery_revision() != 0);
+    const std::vector<uint8_t> snapshot = cartridge.take_battery_ram();
+    REQUIRE_FALSE(cartridge.battery_dirty());
+
+    Cartridge restored(make_rom(4, 0x03, 0x01, 0x03));
+    REQUIRE(restored.load_battery_ram(snapshot));
+    restored.write(0x0000, 0x0A);
+    restored.write(0x4000, 0x01);
+    REQUIRE(restored.read(0xA000) == 0xA5);
+}
+
+TEST_CASE("Battery RAM snapshots preserve MBC2 nibble RAM")
+{
+    Cartridge cartridge(make_rom(4, 0x06, 0x01));
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0xA000, 0xAB);
+    cartridge.write(0xA1FF, 0x04);
+
+    const std::vector<uint8_t> snapshot = cartridge.take_battery_ram();
+    REQUIRE(snapshot.size() == 512);
+    REQUIRE(snapshot[0] == 0x0B);
+    REQUIRE(snapshot[0x1FF] == 0x04);
+
+    Cartridge restored(make_rom(4, 0x06, 0x01));
+    REQUIRE(restored.load_battery_ram(snapshot));
+    restored.write(0x0000, 0x0A);
+    REQUIRE(restored.read(0xA000) == 0xFB);
+    REQUIRE(restored.read(0xA1FF) == 0xF4);
+}
+
+TEST_CASE("Battery RAM rejects a payload with the wrong size without changing RAM")
+{
+    Cartridge cartridge(make_rom(4, 0x03, 0x01, 0x02));
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0xA000, 0x31);
+
+    REQUIRE_FALSE(cartridge.load_battery_ram({}));
+    REQUIRE(cartridge.read(0xA000) == 0x31);
+}
+
+TEST_CASE("MBC3 RTC uses the injected clock and preserves its raw state")
+{
+    RtcClock clock;
+    Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x03));
+    cartridge.set_rtc_clock(RtcClock::now, &clock);
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0x4000, 0x08);
+    cartridge.write(0xA000, 10);
+
+    clock.milliseconds = 2'000;
+    cartridge.write(0x6000, 0x00);
+    cartridge.write(0x6000, 0x01);
+    REQUIRE(cartridge.read(0xA000) == 12);
+
+    const Mbc3RtcRegisters state = cartridge.rtc_registers();
+    Cartridge restored(make_rom(8, 0x10, 0x02, 0x03));
+    REQUIRE(restored.load_rtc_registers(state));
+    const Mbc3RtcRegisters restored_state = restored.rtc_registers();
+    REQUIRE(restored_state.seconds == 12);
+    REQUIRE(restored_state.subsecond_ticks == state.subsecond_ticks);
+    REQUIRE(restored_state.subsecond_remainder == state.subsecond_remainder);
+}
+
+TEST_CASE("MBC3 RTC does not advance its injected clock while halted")
+{
+    RtcClock clock;
+    Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x03));
+    cartridge.set_rtc_clock(RtcClock::now, &clock);
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0x4000, 0x08);
+    cartridge.write(0xA000, 20);
+    cartridge.write(0x4000, 0x0C);
+    cartridge.write(0xA000, 0x40);
+
+    clock.milliseconds = 30'000;
+    cartridge.write(0x6000, 0x00);
+    cartridge.write(0x6000, 0x01);
+    cartridge.write(0x4000, 0x08);
+    REQUIRE(cartridge.read(0xA000) == 20);
 }
 
 TEST_CASE("Cartridge loads and owns a copy of ROM data")
@@ -403,7 +500,7 @@ TEST_CASE("MBC3 latches a stable RTC snapshot")
 
     REQUIRE(cartridge.read(0xA000) == 10);
 
-    cartridge.tick_rtc_seconds(5);
+    cartridge.advance_rtc_milliseconds(5'000);
     REQUIRE(cartridge.read(0xA000) == 10);
 
     cartridge.write(0x6000, 0x00);
@@ -427,7 +524,7 @@ TEST_CASE("MBC3 RTC rolls over its day counter and sets carry")
     cartridge.write(0x4000, 0x0C);
     cartridge.write(0xA000, 0x01);
 
-    cartridge.tick_rtc_seconds(2);
+    cartridge.advance_rtc_milliseconds(2'000);
     cartridge.write(0x6000, 0x00);
     cartridge.write(0x6000, 0x01);
 
@@ -452,7 +549,7 @@ TEST_CASE("MBC3 RTC invalid counter overflow does not carry")
     cartridge.write(0x4000, 0x09);
     cartridge.write(0xA000, 10);
 
-    cartridge.tick_rtc_seconds(1);
+    cartridge.advance_rtc_milliseconds(1'000);
     cartridge.write(0x6000, 0x00);
     cartridge.write(0x6000, 0x01);
 
@@ -469,10 +566,10 @@ TEST_CASE("MBC3 RTC seconds writes reset only the sub-second phase")
     cartridge.write(0x4000, 0x08);
     cartridge.write(0xA000, 10);
 
-    cartridge.tick_rtc_dots(dmg::dot_clock_hz / 2);
+    cartridge.advance_rtc_milliseconds(500);
     cartridge.write(0x4000, 0x09);
     cartridge.write(0xA000, 20);
-    cartridge.tick_rtc_dots(dmg::dot_clock_hz / 2);
+    cartridge.advance_rtc_milliseconds(500);
 
     cartridge.write(0x6000, 0x00);
     cartridge.write(0x6000, 0x01);
@@ -480,12 +577,12 @@ TEST_CASE("MBC3 RTC seconds writes reset only the sub-second phase")
     REQUIRE(cartridge.read(0xA000) == 11);
 
     cartridge.write(0xA000, 30);
-    cartridge.tick_rtc_dots(dmg::dot_clock_hz - 1);
+    cartridge.advance_rtc_milliseconds(999);
     cartridge.write(0x6000, 0x00);
     cartridge.write(0x6000, 0x01);
     REQUIRE(cartridge.read(0xA000) == 30);
 
-    cartridge.tick_rtc_dots(1);
+    cartridge.advance_rtc_milliseconds(1);
     cartridge.write(0x6000, 0x00);
     cartridge.write(0x6000, 0x01);
     REQUIRE(cartridge.read(0xA000) == 31);
@@ -500,7 +597,7 @@ TEST_CASE("MBC3 RTC does not advance while halted")
     cartridge.write(0x4000, 0x0C);
     cartridge.write(0xA000, 0x40);
 
-    cartridge.tick_rtc_seconds(30);
+    cartridge.advance_rtc_milliseconds(30'000);
     cartridge.write(0x6000, 0x00);
     cartridge.write(0x6000, 0x01);
     cartridge.write(0x4000, 0x08);

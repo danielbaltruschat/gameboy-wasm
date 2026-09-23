@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include "boot_rom.h"
 #include "bus.h"
@@ -21,6 +22,18 @@ public:
     void load_boot_rom(std::span<const uint8_t> rom);
     void load_rom(std::span<const uint8_t> rom);
     void reset();
+
+    void set_rtc_clock(Cartridge::RtcClock clock, void* context);
+    void advance_rtc_milliseconds(uint64_t milliseconds);
+    bool has_battery() const;
+    bool has_rtc() const;
+    bool battery_dirty() const;
+    uint64_t battery_revision() const;
+    std::vector<uint8_t> battery_ram() const;
+    std::vector<uint8_t> take_battery_ram();
+    bool load_battery_ram(std::span<const uint8_t> data);
+    Mbc3RtcRegisters rtc_registers();
+    bool load_rtc_registers(const Mbc3RtcRegisters& registers);
 
     bool step_m_cycle();
     int step_instruction();          // execute one CPU instruction, tick hardware

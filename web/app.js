@@ -3,7 +3,9 @@ import createGameBoyModule from "./gameboy.js";
 const status = document.querySelector("#status");
 const bootRomInput = document.querySelector("#boot-rom");
 const gameRomInput = document.querySelector("#game-rom");
+const saveImportInput = document.querySelector("#save-import");
 const resetButton = document.querySelector("#reset");
+const saveExportButton = document.querySelector("#save-export");
 let module;
 let gameboy;
 let gameLoaded = false;
@@ -37,10 +39,15 @@ async function loadFile(input, load, expectedSize) {
 function updateReadyState() {
   const ready = gameLoaded && gameboy.ready();
   resetButton.disabled = !ready;
+  saveImportInput.disabled = !ready;
+  saveExportButton.disabled = !ready || gameboy.exportSaveSize() === 0;
   if (ready) {
-    setStatus("Running. Press Reset to restart the cartridge.");
+    setStatus("Running.");
   }
 }
+
+globalThis.gameboySetStatus = setStatus;
+globalThis.gameboySetReady = () => updateReadyState();
 
 bootRomInput.addEventListener("change", async () => {
   const loaded = await loadFile(bootRomInput, gameboy.loadBootRom.bind(gameboy), 256);
@@ -56,13 +63,40 @@ gameRomInput.addEventListener("change", async () => {
     return;
   }
   gameLoaded = true;
-  setStatus("Game ROM loaded. Load a DMG boot ROM to start.");
+  setStatus("Loading browser save.");
   updateReadyState();
 });
 
 resetButton.addEventListener("click", () => {
   gameboy.reset();
-  setStatus("Reset.");
+});
+
+saveImportInput.addEventListener("change", async () => {
+  const loaded = await loadFile(saveImportInput, gameboy.importSave.bind(gameboy));
+  if (!loaded) {
+    setStatus("The save file does not match this cartridge.");
+  }
+});
+
+saveExportButton.addEventListener("click", () => {
+  const size = gameboy.exportSaveSize();
+  if (size === 0) return;
+
+  const address = module._malloc(size);
+  const copied = gameboy.copyExportSave(address, size);
+  const bytes = module.HEAPU8.slice(address, address + size);
+  module._free(address);
+  if (!copied) {
+    setStatus("Could not export the save.");
+    return;
+  }
+
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "gameboy-save.sav";
+  link.click();
+  URL.revokeObjectURL(url);
 });
 
 createGameBoyModule().then((loadedModule) => {
