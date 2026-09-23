@@ -257,7 +257,7 @@ std::size_t Cartridge::battery_ram_size() const
     return capabilities.mapper == MapperType::Mbc2 ? mbc2.ram.size() : ram.size();
 }
 
-std::vector<uint8_t> Cartridge::battery_ram() const
+std::vector<uint8_t> Cartridge::battery_ram()
 {
     sync_rtc();
 
@@ -329,7 +329,7 @@ bool Cartridge::load_rtc_registers(const Mbc3RtcRegisters& registers)
     return true;
 }
 
-void Cartridge::mark_persistent_dirty() const
+void Cartridge::mark_persistent_dirty()
 {
     if (!capabilities.hasBattery) {
         return;
@@ -339,7 +339,7 @@ void Cartridge::mark_persistent_dirty() const
     ++persistent_revision;
 }
 
-void Cartridge::sync_rtc() const
+void Cartridge::sync_rtc()
 {
     if (!capabilities.hasTimer || rtc_clock == nullptr) {
         return;
@@ -364,7 +364,7 @@ void Cartridge::advance_rtc_milliseconds(uint64_t milliseconds)
     advance_rtc_milliseconds_internal(milliseconds);
 }
 
-void Cartridge::advance_rtc_milliseconds_internal(uint64_t milliseconds) const
+void Cartridge::advance_rtc_milliseconds_internal(uint64_t milliseconds)
 {
     if (!capabilities.hasTimer || mbc3_rtc.halted || milliseconds == 0) {
         return;
@@ -386,7 +386,7 @@ void Cartridge::advance_rtc_milliseconds_internal(uint64_t milliseconds) const
     mark_persistent_dirty();
 }
 
-void Cartridge::advance_rtc_seconds(uint64_t seconds) const
+void Cartridge::advance_rtc_seconds(uint64_t seconds)
 {
     if (!capabilities.hasTimer || mbc3_rtc.halted || seconds == 0) {
         return;
@@ -440,11 +440,11 @@ void Cartridge::advance_rtc_seconds(uint64_t seconds) const
     mbc3_rtc.seconds = time_of_day % 60;
 }
 
-uint8_t Cartridge::read(uint16_t address) const {
+uint8_t Cartridge::read(uint16_t address) {
     return read_bus(address).value_or(0xFF);
 }
 
-std::optional<uint8_t> Cartridge::read_bus(uint16_t address) const {
+std::optional<uint8_t> Cartridge::read_bus(uint16_t address) {
     if (!loaded()) {
         return std::nullopt;
     }
@@ -639,7 +639,7 @@ std::size_t Cartridge::effective_ram_offset(uint16_t address) const {
     return (bank * ram_bank_size + (address - 0xA000)) % ram.size();
 }
 
-std::optional<uint8_t> Cartridge::read_external_ram(uint16_t address) const {
+std::optional<uint8_t> Cartridge::read_external_ram(uint16_t address) {
     assert(address >= 0xA000 && address <= 0xBFFF);
 
     switch (capabilities.mapper) {
@@ -739,7 +739,7 @@ void Cartridge::write_external_ram(uint16_t address, uint8_t value) {
     }
 }
 
-uint8_t Cartridge::read_rtc_register() const {
+uint8_t Cartridge::read_rtc_register() {
     sync_rtc();
 
     switch (rtc_register_select) {

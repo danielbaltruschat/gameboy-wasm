@@ -29,7 +29,7 @@ public:
     bool has_rtc() const;
     bool battery_dirty() const;
     uint64_t battery_revision() const;
-    std::vector<uint8_t> battery_ram() const;
+    std::vector<uint8_t> battery_ram();
     std::vector<uint8_t> take_battery_ram();
     bool load_battery_ram(std::span<const uint8_t> data);
     Mbc3RtcRegisters rtc_registers();

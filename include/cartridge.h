@@ -93,14 +93,14 @@ public:
     bool has_rtc() const;
     bool battery_dirty() const;
     uint64_t battery_revision() const;
-    std::vector<uint8_t> battery_ram() const;
+    std::vector<uint8_t> battery_ram();
     std::vector<uint8_t> take_battery_ram();
     bool load_battery_ram(std::span<const uint8_t> data);
     Mbc3RtcRegisters rtc_registers();
     bool load_rtc_registers(const Mbc3RtcRegisters& registers);
 
-    uint8_t read(uint16_t address) const;
-    std::optional<uint8_t> read_bus(uint16_t address) const;
+    uint8_t read(uint16_t address);
+    std::optional<uint8_t> read_bus(uint16_t address);
     void write(uint16_t address, uint8_t value);
 
     const CartridgeHeader& get_header() const;
@@ -121,28 +121,28 @@ private:
 
     Mbc1State mbc1;
     Mbc2State mbc2;
-    mutable Mbc3Rtc mbc3_rtc;
+    Mbc3Rtc mbc3_rtc;
     Mbc5State mbc5;
 
     RtcClock rtc_clock = nullptr;
     void* rtc_clock_context = nullptr;
-    mutable uint64_t rtc_clock_anchor = 0;
-    mutable bool rtc_clock_anchored = false;
-    mutable bool persistent_dirty = false;
-    mutable uint64_t persistent_revision = 0;
+    uint64_t rtc_clock_anchor = 0;
+    bool rtc_clock_anchored = false;
+    bool persistent_dirty = false;
+    uint64_t persistent_revision = 0;
 
     void parse_header();
     void configure_mapper();
     std::size_t effective_rom_offset(uint16_t address) const;
     std::size_t effective_ram_offset(uint16_t address) const;
 
-    std::optional<uint8_t> read_external_ram(uint16_t address) const;
+    std::optional<uint8_t> read_external_ram(uint16_t address);
     void write_external_ram(uint16_t address, uint8_t value);
-    uint8_t read_rtc_register() const;
+    uint8_t read_rtc_register();
     void write_rtc_register(uint8_t value);
-    void sync_rtc() const;
-    void advance_rtc_milliseconds_internal(uint64_t milliseconds) const;
-    void advance_rtc_seconds(uint64_t seconds) const;
-    void mark_persistent_dirty() const;
+    void sync_rtc();
+    void advance_rtc_milliseconds_internal(uint64_t milliseconds);
+    void advance_rtc_seconds(uint64_t seconds);
+    void mark_persistent_dirty();
     std::size_t battery_ram_size() const;
 };

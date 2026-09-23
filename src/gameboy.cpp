@@ -50,7 +50,7 @@ uint64_t GameBoy::battery_revision() const
     return cartridge.battery_revision();
 }
 
-std::vector<uint8_t> GameBoy::battery_ram() const
+std::vector<uint8_t> GameBoy::battery_ram()
 {
     return cartridge.battery_ram();
 }
