@@ -299,7 +299,7 @@ Mbc3RtcRegisters Cartridge::rtc_registers()
     sync_rtc();
     return {
         mbc3_rtc.subsecond_ticks,
-        mbc3_rtc.subsecond_remainder,
+        mbc3_rtc.subsecond_tick_thousandths,
         mbc3_rtc.seconds,
         mbc3_rtc.minutes,
         mbc3_rtc.hours,
@@ -316,7 +316,7 @@ bool Cartridge::load_rtc_registers(const Mbc3RtcRegisters& registers)
     }
 
     mbc3_rtc.subsecond_ticks = registers.subsecond_ticks;
-    mbc3_rtc.subsecond_remainder = registers.subsecond_remainder;
+    mbc3_rtc.subsecond_tick_thousandths = registers.subsecond_tick_thousandths;
     mbc3_rtc.seconds = registers.seconds;
     mbc3_rtc.minutes = registers.minutes;
     mbc3_rtc.hours = registers.hours;
@@ -355,16 +355,11 @@ void Cartridge::sync_rtc()
         return;
     }
 
-    advance_rtc_milliseconds_internal(now - rtc_time_anchor);
+    advance_rtc_milliseconds(now - rtc_time_anchor);
     rtc_time_anchor = now;
 }
 
 void Cartridge::advance_rtc_milliseconds(uint64_t milliseconds)
-{
-    advance_rtc_milliseconds_internal(milliseconds);
-}
-
-void Cartridge::advance_rtc_milliseconds_internal(uint64_t milliseconds)
 {
     if (!capabilities.hasTimer || mbc3_rtc.halted || milliseconds == 0) {
         return;
@@ -374,11 +369,11 @@ void Cartridge::advance_rtc_milliseconds_internal(uint64_t milliseconds)
     const uint64_t fractional_milliseconds = milliseconds % milliseconds_per_second;
     advance_rtc_seconds(whole_seconds);
 
-    const uint64_t total_fractional_ticks =
-        static_cast<uint64_t>(mbc3_rtc.subsecond_remainder) +
+    const uint64_t total_tick_thousandths =
+        static_cast<uint64_t>(mbc3_rtc.subsecond_tick_thousandths) +
         fractional_milliseconds * rtc_ticks_per_second;
-    const uint64_t additional_ticks = total_fractional_ticks / milliseconds_per_second;
-    mbc3_rtc.subsecond_remainder = total_fractional_ticks % milliseconds_per_second;
+    const uint64_t additional_ticks = total_tick_thousandths / milliseconds_per_second;
+    mbc3_rtc.subsecond_tick_thousandths = total_tick_thousandths % milliseconds_per_second;
 
     const uint64_t total_ticks = static_cast<uint64_t>(mbc3_rtc.subsecond_ticks) + additional_ticks;
     mbc3_rtc.subsecond_ticks = total_ticks % rtc_ticks_per_second;
@@ -392,34 +387,16 @@ void Cartridge::advance_rtc_seconds(uint64_t seconds)
         return;
     }
 
-    // Hardware writes can put the counter fields outside their normal ranges.
-    // One tick preserves the observable wrap behavior before using fast arithmetic.
-    if (mbc3_rtc.seconds >= 60 || mbc3_rtc.minutes >= 60 || mbc3_rtc.hours >= 24) {
-        if (mbc3_rtc.seconds != 59) {
-            mbc3_rtc.seconds = (mbc3_rtc.seconds + 1) & 0x3F;
-        } else {
-            mbc3_rtc.seconds = 0;
-            if (mbc3_rtc.minutes != 59) {
-                mbc3_rtc.minutes = (mbc3_rtc.minutes + 1) & 0x3F;
-            } else {
-                mbc3_rtc.minutes = 0;
-                if (mbc3_rtc.hours != 23) {
-                    mbc3_rtc.hours = (mbc3_rtc.hours + 1) & 0x1F;
-                } else {
-                    mbc3_rtc.hours = 0;
-                    if (mbc3_rtc.days == 0x01FF) {
-                        mbc3_rtc.days = 0;
-                        mbc3_rtc.day_carry = true;
-                    } else {
-                        ++mbc3_rtc.days;
-                    }
-                }
-            }
-        }
+    // Normalize hardware-writable invalid values before fast calendar arithmetic.
+    while (
+        seconds != 0 &&
+        (mbc3_rtc.seconds >= 60 || mbc3_rtc.minutes >= 60 || mbc3_rtc.hours >= 24)
+    ) {
+        tick_rtc_second();
         --seconds;
-        if (seconds == 0) {
-            return;
-        }
+    }
+    if (seconds == 0) {
+        return;
     }
 
     const uint64_t current_seconds =
@@ -438,6 +415,34 @@ void Cartridge::advance_rtc_seconds(uint64_t seconds)
     mbc3_rtc.hours = time_of_day / (60 * 60);
     mbc3_rtc.minutes = (time_of_day / 60) % 60;
     mbc3_rtc.seconds = time_of_day % 60;
+}
+
+void Cartridge::tick_rtc_second()
+{
+    if (mbc3_rtc.seconds != 59) {
+        mbc3_rtc.seconds = (mbc3_rtc.seconds + 1) & 0x3F;
+        return;
+    }
+    mbc3_rtc.seconds = 0;
+
+    if (mbc3_rtc.minutes != 59) {
+        mbc3_rtc.minutes = (mbc3_rtc.minutes + 1) & 0x3F;
+        return;
+    }
+    mbc3_rtc.minutes = 0;
+
+    if (mbc3_rtc.hours != 23) {
+        mbc3_rtc.hours = (mbc3_rtc.hours + 1) & 0x1F;
+        return;
+    }
+    mbc3_rtc.hours = 0;
+
+    if (mbc3_rtc.days == 0x01FF) {
+        mbc3_rtc.days = 0;
+        mbc3_rtc.day_carry = true;
+    } else {
+        ++mbc3_rtc.days;
+    }
 }
 
 uint8_t Cartridge::read(uint16_t address) {
@@ -766,7 +771,7 @@ void Cartridge::write_rtc_register(uint8_t value) {
     case 0x08:
         mbc3_rtc.seconds = value & 0x3F;
         mbc3_rtc.subsecond_ticks = 0;
-        mbc3_rtc.subsecond_remainder = 0;
+        mbc3_rtc.subsecond_tick_thousandths = 0;
         break;
     case 0x09:
         mbc3_rtc.minutes = value & 0x3F;

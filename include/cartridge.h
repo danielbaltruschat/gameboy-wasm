@@ -42,7 +42,7 @@ struct Mbc2State {
 
 struct Mbc3Rtc {
     uint16_t subsecond_ticks = 0;
-    uint16_t subsecond_remainder = 0;
+    uint16_t subsecond_tick_thousandths = 0;
     uint8_t seconds = 0;
     uint8_t minutes = 0;
     uint8_t hours = 0;
@@ -62,7 +62,7 @@ struct Mbc3Rtc {
 // Battery-backed MBC3 RTC state. Latch and mapper selection state are volatile.
 struct Mbc3RtcRegisters {
     uint16_t subsecond_ticks = 0;
-    uint16_t subsecond_remainder = 0;
+    uint16_t subsecond_tick_thousandths = 0;
     uint8_t seconds = 0;
     uint8_t minutes = 0;
     uint8_t hours = 0;
@@ -141,8 +141,8 @@ private:
     uint8_t read_rtc_register();
     void write_rtc_register(uint8_t value);
     void sync_rtc();
-    void advance_rtc_milliseconds_internal(uint64_t milliseconds);
     void advance_rtc_seconds(uint64_t seconds);
+    void tick_rtc_second();
     void mark_persistent_dirty();
     std::size_t battery_ram_size() const;
 };

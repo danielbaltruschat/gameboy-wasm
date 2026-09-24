@@ -121,7 +121,7 @@ TEST_CASE("MBC3 RTC uses the injected clock and preserves its raw state")
     const Mbc3RtcRegisters restored_state = restored.rtc_registers();
     REQUIRE(restored_state.seconds == 12);
     REQUIRE(restored_state.subsecond_ticks == state.subsecond_ticks);
-    REQUIRE(restored_state.subsecond_remainder == state.subsecond_remainder);
+    REQUIRE(restored_state.subsecond_tick_thousandths == state.subsecond_tick_thousandths);
 }
 
 TEST_CASE("MBC3 RTC does not advance its injected clock while halted")
@@ -557,6 +557,25 @@ TEST_CASE("MBC3 RTC invalid counter overflow does not carry")
     REQUIRE(cartridge.read(0xA000) == 0);
     cartridge.write(0x4000, 0x09);
     REQUIRE(cartridge.read(0xA000) == 10);
+}
+
+TEST_CASE("MBC3 RTC normalizes invalid counters before bulk catch-up")
+{
+    Cartridge cartridge(make_rom(8, 0x10, 0x02, 0x03));
+    cartridge.write(0x0000, 0x0A);
+    cartridge.write(0x4000, 0x08);
+    cartridge.write(0xA000, 58);
+    cartridge.write(0x4000, 0x09);
+    cartridge.write(0xA000, 63);
+
+    cartridge.advance_rtc_milliseconds(3'000);
+    cartridge.write(0x6000, 0x00);
+    cartridge.write(0x6000, 0x01);
+
+    cartridge.write(0x4000, 0x08);
+    REQUIRE(cartridge.read(0xA000) == 1);
+    cartridge.write(0x4000, 0x09);
+    REQUIRE(cartridge.read(0xA000) == 0);
 }
 
 TEST_CASE("MBC3 RTC seconds writes reset only the sub-second phase")

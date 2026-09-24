@@ -396,7 +396,7 @@ private:
     static void append_rtc(std::vector<uint8_t>& output, const Mbc3RtcRegisters& registers)
     {
         append_u16(output, registers.subsecond_ticks);
-        append_u16(output, registers.subsecond_remainder);
+        append_u16(output, registers.subsecond_tick_thousandths);
         output.push_back(registers.seconds);
         output.push_back(registers.minutes);
         output.push_back(registers.hours);
