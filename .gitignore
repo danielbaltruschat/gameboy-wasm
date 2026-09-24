@@ -1,5 +1,6 @@
 build/
 build-web/
+build-web-*/
 .cache/clangd/index/
 __cmake_systeminformation/CMakeFiles/
 vcpkg_installed/
