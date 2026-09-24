@@ -26,11 +26,19 @@ jobs:
         with:
           version: 6.0.9
 
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+
       - name: Build browser frontend
         run: |
-          emcmake cmake -S . -B build-web \
+          emscripten_root="$(dirname "$(command -v emcc)")"
+          cmake -S . -B build-web \
             -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTING=OFF
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$emscripten_root/cmake/Modules/Platform/Emscripten.cmake" \
+            -DVCPKG_TARGET_TRIPLET=wasm32-emscripten \
+            -DVCPKG_OVERLAY_TRIPLETS="$VCPKG_ROOT/triplets/community"
           cmake --build build-web --parallel
 
       - name: Upload Pages artifact
